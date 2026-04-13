@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Brevard County Public Schools | K-8 Exploration Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Libre+Franklin:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="login-gate" class="login-gate">
+      <div class="login-gate__inner">
+        <h1 class="login-gate__title">
+          <span class="login-gate__title-line">Brevard County Public Schools</span>
+          <span class="login-gate__title-line">K-8 Exploration Dashboard</span>
+        </h1>
+        <p class="login-gate__hint">Please enter the password to access this dashboard.</p>
+        <form id="login-form" class="login-gate__form" novalidate>
+          <label class="visually-hidden" for="login-password">Password</label>
+          <input
+            type="password"
+            id="login-password"
+            class="login-gate__input"
+            name="password"
+            placeholder="Enter password"
+            autocomplete="current-password"
+            required
+          />
+          <p id="login-error" class="login-gate__error" role="alert" hidden>
+            Incorrect password.
+          </p>
+          <button type="submit" class="login-gate__submit">Submit</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="dashboard" id="dashboard" hidden>
+      <aside class="dashboard-sidebar" id="dashboard-sidebar" aria-label="Dashboard data">
+        <header class="sidebar-top-bar">
+          <div class="sidebar-top-bar__row sidebar-top-bar__row--heading">
+            <h1 class="sidebar-brand-line">
+              <span id="sidebar-brand-main" class="sidebar-brand-main"
+                >Brevard County Public Schools | K-8 Exploration Dashboard</span>
+              <span id="sidebar-view-title" class="sidebar-brand-view">Existing Conditions</span>
+            </h1>
+            <div class="sidebar-credits" aria-label="Developed for Brevard Public Schools by Perkins Eastman">
+              <span class="sidebar-credits__text">Developed for</span>
+              <img
+                class="sidebar-credits__logo sidebar-credits__logo--brevard"
+                src="assets/brevard-public-schools.png"
+                alt="Brevard Public Schools"
+              />
+              <span class="sidebar-credits__text">by</span>
+              <img
+                class="sidebar-credits__logo sidebar-credits__logo--pe"
+                src="assets/perkins-eastman.png"
+                alt="Perkins Eastman"
+              />
+            </div>
+          </div>
+          <div class="sidebar-top-bar__row sidebar-top-bar__row--switcher">
+            <div
+              class="page-switcher basemap-segmented"
+              role="tablist"
+              aria-label="Dashboard view"
+            >
+              <button
+                type="button"
+                role="tab"
+                id="page-tab-existing"
+                class="is-active"
+                data-page="existing"
+                aria-selected="true"
+                aria-controls="page-existing"
+                title="Existing Conditions"
+              >
+                Existing Conditions
+              </button>
+              <button
+                type="button"
+                role="tab"
+                id="page-tab-scenario"
+                data-page="scenario"
+                aria-selected="false"
+                aria-controls="page-scenario"
+                title="Scenario Planning"
+              >
+                Scenario Planning
+              </button>
+            </div>
+          </div>
+        </header>
+
+        <div
+          id="page-existing"
+          class="sidebar-page-panel"
+          role="tabpanel"
+          aria-labelledby="sidebar-brand-main sidebar-view-title"
+        >
+          <div class="dashboard-controls">
+            <label class="visually-hidden" for="school-select">Select a school</label>
+            <select id="school-select" class="school-select" disabled>
+              <option value="">Loading schools…</option>
+            </select>
+          </div>
+          <div class="school-details" aria-live="polite">
+            <p class="school-details-line">
+              <span id="school-details-primary" class="school-details-text school-details-placeholder"
+                >Name of School | Grades Served | Address</span
+              >
+            </p>
+            <p class="school-details-line school-details-meta">
+              <span id="school-details-secondary" class="school-details-text school-details-placeholder"
+                >Constructed: 19XX | Age of Site: XX | Size of Site (Acres): XX</span
+              >
+            </p>
+          </div>
+
+        <section class="kpi-section" aria-label="Key metrics">
+          <div class="kpi-grid">
+            <article class="kpi-card">
+              <h2 class="kpi-label">'25-26 Enrollment</h2>
+              <p class="kpi-value kpi-value--placeholder" id="kpi-enrollment">—</p>
+            </article>
+            <article class="kpi-card">
+              <h2 class="kpi-label">Factored Capacity</h2>
+              <p class="kpi-value kpi-value--placeholder" id="kpi-capacity">—</p>
+            </article>
+            <article class="kpi-card">
+              <h2 class="kpi-label">Utilization</h2>
+              <p class="kpi-value kpi-value--placeholder" id="kpi-utilization">—</p>
+            </article>
+            <article class="kpi-card">
+              <h2 class="kpi-label">Attendance Boundary Capture Rate</h2>
+              <p class="kpi-value kpi-value--placeholder" id="kpi-capture">—</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="enrollment-chart-panel" aria-label="Enrollment history and projections">
+          <h2 class="enrollment-chart-heading">Enrollment over time</h2>
+          <div id="enrollment-chart" class="enrollment-chart" aria-live="polite">
+            <p class="enrollment-chart-empty">Select a school to view enrollment trends.</p>
+          </div>
+        </section>
+
+        <section class="sankey-panel" id="sankey-panel" aria-label="Feeder school transitions">
+          <h2 class="sankey-heading">Feeder Flows by Transition, 2024-25 to 2025-26</h2>
+          <div id="sankey-row" class="sankey-row" aria-live="polite">
+            <div class="sankey-col sankey-col--es-ms">
+              <h3 class="sankey-subheading">Grades 6→7 (elementary → middle)</h3>
+              <div id="sankey-es-ms" class="sankey-chart">
+                <p class="sankey-empty">Select a school to view feeder flows.</p>
+              </div>
+            </div>
+            <div class="sankey-col sankey-col--ms-hs">
+              <h3 class="sankey-subheading">Grades 7→8 (middle → high)</h3>
+              <div id="sankey-ms-hs" class="sankey-chart">
+                <p class="sankey-empty">Select a school to view feeder flows.</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="demographics-row" aria-label="Demographics charts">
+          <div class="demographics-chart-card">
+            <h3 class="demographics-chart-title">Race and Ethnicity</h3>
+            <div
+              id="demographics-ethnicity"
+              class="demographics-chart-body"
+              aria-live="polite"
+            >
+              <p class="demographics-pie-empty">
+                Select a school to view student demographics.
+              </p>
+            </div>
+          </div>
+          <div class="demographics-chart-card">
+            <h3 class="demographics-chart-title">Free and Reduced Lunch</h3>
+            <div
+              id="demographics-lunch"
+              class="demographics-chart-body"
+              aria-live="polite"
+            >
+              <p class="demographics-pie-empty">
+                Select a school to view student demographics.
+              </p>
+            </div>
+          </div>
+        </section>
+        </div>
+
+        <div
+          id="page-scenario"
+          class="sidebar-page-panel sidebar-page-panel--scenario"
+          role="tabpanel"
+          aria-labelledby="sidebar-brand-main sidebar-view-title"
+          hidden
+        >
+          <div class="dashboard-controls">
+            <label class="visually-hidden" for="scenario-school-select">Select a middle school</label>
+            <select id="scenario-school-select" class="school-select" disabled>
+              <option value="">Loading…</option>
+            </select>
+          </div>
+          <div class="school-details scenario-school-details" aria-live="polite">
+            <p class="school-details-line">
+              <span id="scenario-details-primary" class="school-details-text school-details-placeholder"
+                >Select a middle school for a merged K–8 scenario summary.</span
+              >
+            </p>
+          </div>
+
+          <div class="scenario-merger-control">
+            <label class="scenario-merger-label" for="scenario-complete-merger">
+              <input type="checkbox" id="scenario-complete-merger" />
+              Complete merger (100% of each selected elementary’s enrollment)
+            </label>
+          </div>
+
+          <div id="scenario-data-alerts" class="scenario-data-alerts" hidden aria-live="polite"></div>
+
+          <section class="enrollment-chart-panel" aria-label="Merged enrollment history and projections">
+            <h2 class="enrollment-chart-heading" id="scenario-enrollment-chart-heading">
+              Merged K–8 enrollment over time (2025-26 onward)
+            </h2>
+            <div id="scenario-enrollment-chart" class="enrollment-chart" aria-live="polite">
+              <p class="enrollment-chart-empty">Select a middle school to view merged enrollment trends.</p>
+            </div>
+          </section>
+
+          <fieldset class="scenario-feeder-fieldset">
+            <legend class="scenario-feeder-legend">Feeder elementary schools</legend>
+            <ul id="scenario-feeder-list" class="scenario-feeder-list"></ul>
+          </fieldset>
+
+          <section class="demographics-row" aria-label="Merged demographics">
+            <div class="demographics-chart-card">
+              <h3 class="demographics-chart-title">Race and Ethnicity (merged)</h3>
+              <div
+                id="scenario-demographics-ethnicity"
+                class="demographics-chart-body"
+                aria-live="polite"
+              >
+                <p class="demographics-pie-empty">Select a middle school to view merged demographics.</p>
+              </div>
+            </div>
+            <div class="demographics-chart-card">
+              <h3 class="demographics-chart-title">Free and Reduced Lunch (merged)</h3>
+              <div
+                id="scenario-demographics-lunch"
+                class="demographics-chart-body"
+                aria-live="polite"
+              >
+                <p class="demographics-pie-empty">Select a middle school to view merged demographics.</p>
+              </div>
+            </div>
+          </section>
+        </div>
+      </aside>
+
+      <div
+        class="dashboard-resizer"
+        id="dashboard-resizer"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Drag to resize panels"
+        tabindex="0"
+      ></div>
+
+      <div class="dashboard-map-wrap">
+        <header class="toolbar" id="toolbar">
+          <button
+            type="button"
+            class="toolbar-toggle"
+            id="toolbar-toggle"
+            aria-expanded="true"
+            aria-controls="toolbar-panel"
+          >
+            <span class="toolbar-toggle-label">Map layers</span>
+            <span class="toolbar-toggle-chevron" aria-hidden="true"></span>
+          </button>
+          <div class="toolbar-panel" id="toolbar-panel">
+            <div class="layer-sections">
+              <section class="layer-section" aria-labelledby="heading-boundaries">
+                <h2 class="layer-section-title" id="heading-boundaries">
+                  Assignment Boundaries
+                </h2>
+                <div class="toggles" id="boundary-toggles"></div>
+              </section>
+              <section class="layer-section" aria-labelledby="heading-schools">
+                <h2 class="layer-section-title" id="heading-schools">School Locations</h2>
+                <div class="toggles" id="school-toggles"></div>
+              </section>
+              <section class="layer-section" aria-labelledby="heading-school-parcels">
+                <h2 class="layer-section-title" id="heading-school-parcels">School Parcels</h2>
+                <div class="toggles" id="school-parcel-toggles"></div>
+              </section>
+              <section class="layer-section" aria-labelledby="heading-student-hex">
+                <h2 class="layer-section-title" id="heading-student-hex">
+                  Student Residence Density
+                </h2>
+                <p class="layer-section-hint" id="student-hex-layer-hint">
+                  Only students attending selected school.
+                </p>
+                <div class="toggles" id="student-hex-toggles"></div>
+              </section>
+            </div>
+            <div
+              class="basemap-row"
+              role="group"
+              aria-label="Basemap"
+              id="basemap-toggle"
+            >
+              <span class="basemap-label">Basemap</span>
+              <div class="basemap-segmented">
+                <button type="button" data-basemap="streets" class="is-active" aria-pressed="true">
+                  Map
+                </button>
+                <button type="button" data-basemap="satellite" aria-pressed="false">
+                  Satellite
+                </button>
+              </div>
+            </div>
+          </div>
+        </header>
+        <div id="map" role="application" aria-label="Interactive map"></div>
+      </div>
+    </div>
+    <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+    <script src="https://unpkg.com/d3-sankey@0.12.3/dist/d3-sankey.min.js"></script>
+    <script>
+      (function () {
+        var AUTH_KEY = "brevardK8DashAuth";
+        var PASSWORD = "BrevardK8";
+        var gate = document.getElementById("login-gate");
+        var dash = document.getElementById("dashboard");
+        var form = document.getElementById("login-form");
+        var err = document.getElementById("login-error");
+        var input = document.getElementById("login-password");
+
+        function loadApp() {
+          if (window.__dashboardAppLoaded) return;
+          window.__dashboardAppLoaded = true;
+          var s = document.createElement("script");
+          s.src = "app.js";
+          document.body.appendChild(s);
+        }
+
+        function enterDashboard() {
+          sessionStorage.setItem(AUTH_KEY, "1");
+          gate.hidden = true;
+          dash.hidden = false;
+          document.body.classList.add("dashboard-unlocked");
+          loadApp();
+        }
+
+        if (sessionStorage.getItem(AUTH_KEY) === "1") {
+          gate.hidden = true;
+          dash.hidden = false;
+          document.body.classList.add("dashboard-unlocked");
+          loadApp();
+        } else if (form && input) {
+          form.addEventListener("submit", function (e) {
+            e.preventDefault();
+            if (input.value === PASSWORD) {
+              err.hidden = true;
+              enterDashboard();
+            } else {
+              err.hidden = false;
+            }
+          });
+        }
+      })();
+    </script>
+  </body>
+</html>
