@@ -1182,6 +1182,8 @@
   function normalizeGradesServedForUi(raw) {
     if (raw == null || raw === "") return "";
     var t = String(raw).trim();
+    /* Leading apostrophe = Excel “text” cell; strip before normalizing. */
+    if (t.charAt(0) === "'") t = t.slice(1).trim();
     if (/^12-sep$/i.test(t)) return "9-12";
     if (/^12-jul$/i.test(t)) return "7-12";
     if (/^8-jul$/i.test(t)) return "7-8";
@@ -4330,6 +4332,34 @@
     });
     tabScenario.addEventListener("click", function () {
       setPage("scenario");
+    });
+  })();
+
+  (function setupSchoolMasterCsvDownload() {
+    var btn = document.getElementById("download-school-master-btn");
+    if (!btn) return;
+    btn.addEventListener("click", function () {
+      fetch(DATA.masterCsv)
+        .then(function (r) {
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          return r.blob();
+        })
+        .then(function (blob) {
+          var url = URL.createObjectURL(blob);
+          var a = document.createElement("a");
+          a.href = url;
+          a.download = "school_master.csv";
+          a.setAttribute("aria-hidden", "true");
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        })
+        .catch(function () {
+          alert(
+            "Could not download school_master.csv. Serve this folder over HTTP (e.g. Live Server), not as a file:// URL."
+          );
+        });
     });
   })();
 })();
