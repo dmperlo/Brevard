@@ -6,25 +6,186 @@
     ms: "geo/MSBoundaries.json",
     hs: "geo/HSBoundaries.json",
     schools: "geo/SchoolLocations.json",
-    enrollment: "data/processed/enrollment.json",
-    facilityAge: "data/processed/facility_age.json",
-    demographics: "data/processed/demographics_by_msid.json",
-    capture: "data/processed/capture_by_msid.json",
+    /** Single source for enrollment, capacity, utilization, capture, facility stats, demographics (CSV). */
+    masterCsv: "data/school_master.csv",
     sankeyEsMs: "data/processed/sankey_es_ms.json",
     studentHexagons: "geo/StudentHexagons.geojson",
     schoolParcels: "geo/SchoolParcels.geojson",
+    schoolBoardDistricts: "geo/SchoolBoardDistricts.geojson",
+    charterSchoolLocations: "geo/CharterSchoolLocations.geojson",
   };
+
+  /**
+   * @param {string} text
+   * @returns {string[][]}
+   */
+  function parseCsvRows(text) {
+    var rows = [];
+    var row = [];
+    var cur = "";
+    var inQ = false;
+    if (!text) return rows;
+    if (text.charCodeAt(0) === 0xfeff) {
+      text = text.slice(1);
+    }
+    for (var i = 0; i < text.length; i++) {
+      var c = text[i];
+      if (inQ) {
+        if (c === '"') {
+          if (text[i + 1] === '"') {
+            cur += '"';
+            i++;
+          } else {
+            inQ = false;
+          }
+        } else {
+          cur += c;
+        }
+      } else {
+        if (c === '"') {
+          inQ = true;
+        } else if (c === ",") {
+          row.push(cur);
+          cur = "";
+        } else if (c === "\n") {
+          row.push(cur);
+          rows.push(row);
+          row = [];
+          cur = "";
+        } else if (c === "\r") {
+          /* ignore */
+        } else {
+          cur += c;
+        }
+      }
+    }
+    row.push(cur);
+    if (row.length > 1 || (row.length === 1 && row[0] !== "")) {
+      rows.push(row);
+    }
+    return rows;
+  }
+
+  /**
+   * @param {string} text raw CSV
+   * @returns {Object<string, Object>|null} keyed by MSID string
+   */
+  function parseSchoolMasterCsv(text) {
+    var grid = parseCsvRows(text);
+    if (!grid || grid.length < 2) return null;
+    var headers = grid[0].map(function (h) {
+      return String(h).trim();
+    });
+    var byMsid = {};
+    for (var r = 1; r < grid.length; r++) {
+      var cells = grid[r];
+      if (!cells || !cells.length) continue;
+      var obj = {};
+      for (var c = 0; c < headers.length; c++) {
+        obj[headers[c]] = cells[c] != null ? String(cells[c]).trim() : "";
+      }
+      var idRaw = obj.msid != null ? String(obj.msid).trim() : "";
+      if (!idRaw) continue;
+      var idNum = parseInt(idRaw, 10);
+      if (isNaN(idNum)) continue;
+      var idPadded = String(idNum).padStart(4, "0");
+      var idUnpadded = String(idNum);
+      obj.msid = idPadded;
+      byMsid[idPadded] = obj;
+      byMsid[idUnpadded] = obj;
+    }
+    return byMsid;
+  }
+
+  /** @returns {Object|null} */
+  function masterRow(msid) {
+    if (msid == null || isNaN(msid) || !MASTER_BY_MSID) return null;
+    return MASTER_BY_MSID[String(msid)] || null;
+  }
+
+  function schoolLevelToTypeString(level) {
+    var lv = String(level || "").toLowerCase();
+    if (lv === "elementary") return "ELEMENTARY";
+    if (lv === "middle") return "MIDDLE";
+    if (lv === "high") return "HIGH";
+    if (lv === "jr_sr_high") return "JR SR HIGH";
+    return "";
+  }
+
+  /** Overlays TYPE from master CSV school_level when present (single source of truth). */
+  function schoolPropsWithMasterType(p) {
+    if (!p) return p;
+    var msid = p.SCHOOLS_ID != null ? Number(p.SCHOOLS_ID) : NaN;
+    var m = masterRow(msid);
+    var t = m && schoolLevelToTypeString(m.school_level);
+    if (t) return Object.assign({}, p, { TYPE: t });
+    return p;
+  }
+
+  /** Applies master TYPE to every school feature so map layers and parcels match CSV (e.g. 7–12). */
+  function enrichSchoolsFcWithMasterType(schoolsFc) {
+    if (!schoolsFc || !schoolsFc.features || !schoolsFc.features.length) {
+      return schoolsFc;
+    }
+    return {
+      type: "FeatureCollection",
+      features: schoolsFc.features.map(function (ft) {
+        var p = ft.properties;
+        var merged = schoolPropsWithMasterType(p);
+        return Object.assign({}, ft, { properties: merged || p });
+      }),
+    };
+  }
+
+  /** @returns {{ ethnicity: Object<string, number>, lunchStatus: Object<string, number> }|null} */
+  function demographicsObjectsFromMaster(m) {
+    if (!m) return null;
+    var eth = {};
+    var lunch = {};
+    for (var i = 0; i < DEMO_ETH_SLUGS.length; i++) {
+      var d = DEMO_ETH_SLUGS[i];
+      var v = m[d.slug];
+      if (v !== "" && v != null && !isNaN(Number(v))) {
+        var n = Number(v);
+        if (n > 0) eth[d.label] = n;
+      }
+    }
+    for (var j = 0; j < DEMO_LUNCH_SLUGS.length; j++) {
+      var e = DEMO_LUNCH_SLUGS[j];
+      var w = m[e.slug];
+      if (w !== "" && w != null && !isNaN(Number(w))) {
+        lunch[e.label] = Number(w);
+      }
+    }
+    return { ethnicity: eth, lunchStatus: lunch };
+  }
+
+  function projectedColumnForSyLabel(label) {
+    return "projected_" + String(label).replace(/-/g, "_");
+  }
 
   /** Set after GeoJSON loads; used to zoom to assignment boundaries. */
   var GEO_CACHE = { es: null, ms: null, hs: null, schools: null };
-  /** From export of projected enrollment workbook; null if missing or failed to load. */
-  var ENROLLMENT_CACHE = null;
-  /** From Age of all Facilities xls (by school name); null if missing or failed to load. */
-  var FACILITY_CACHE = null;
-  /** Student SY2025-26 aggregates by MSID (ethnicity, lunch); null if missing. */
-  var DEMOGRAPHICS_CACHE = null;
-  /** Capture rate by MSID and level (elementary/middle/high); null if missing. */
-  var CAPTURE_CACHE = null;
+  /** Parsed rows from data/school_master.csv keyed by MSID string; null if missing or failed to load. */
+  var MASTER_BY_MSID = null;
+  /** Projected school-year column labels (matches CSV projected_* headers). */
+  var MASTER_PROJECTION_LABELS = ["2026-27", "2027-28", "2028-29", "2029-30", "2030-31"];
+  /** Slugs and display labels for ethnicity count columns in the master CSV. */
+  var DEMO_ETH_SLUGS = [
+    { slug: "eth_hawaiian_native_pacific_islander", label: "Hawaiian Native/Pacific Islander" },
+    { slug: "eth_asian", label: "Asian" },
+    { slug: "eth_black_non_hispanic", label: "Black, Non-Hispanic" },
+    { slug: "eth_hispanic", label: "Hispanic" },
+    { slug: "eth_amer_indian_or_alaskan_native", label: "Amer. Indian or Alaskan Native" },
+    { slug: "eth_multi_racial", label: "Multi-Racial" },
+    { slug: "eth_white_non_hispanic", label: "White, Non-Hispanic" },
+    { slug: "eth_unknown", label: "Unknown" },
+  ];
+  var DEMO_LUNCH_SLUGS = [
+    { slug: "lunch_not_free_reduced", label: "Not free/reduced" },
+    { slug: "lunch_free", label: "Free" },
+    { slug: "lunch_reduced", label: "Reduced" },
+  ];
   /** ES→MS flows from SankeyFlowHelper export; null if missing. */
   var SANKEY_CACHE = null;
   /** Pre-aggregated student hex counts by school MSID (from one polygon per student). */
@@ -53,6 +214,9 @@
     elementary: { fill: "#16a34a", line: "#15803d" },
     middle: { fill: "#2563eb", line: "#1d4ed8" },
     high: { fill: "#9333ea", line: "#7e22ce" },
+    /** 7–12 / Jr–Sr schools (distinct from 9–12 high on map and Sankey). */
+    jrSr: { fill: "#ea580c", line: "#c2410c" },
+    charter: { fill: "#ec4899", line: "#be185d" },
   };
 
   /** More transparent assignment zone fills */
@@ -233,33 +397,12 @@
       fetch(DATA.schools).then(function (r) {
         return r.json();
       }),
-      fetch(DATA.enrollment)
+      fetch(DATA.masterCsv)
         .then(function (r) {
-          return r.ok ? r.json() : null;
+          return r.ok ? r.text() : "";
         })
         .catch(function () {
-          return null;
-        }),
-      fetch(DATA.facilityAge)
-        .then(function (r) {
-          return r.ok ? r.json() : null;
-        })
-        .catch(function () {
-          return null;
-        }),
-      fetch(DATA.demographics)
-        .then(function (r) {
-          return r.ok ? r.json() : null;
-        })
-        .catch(function () {
-          return null;
-        }),
-      fetch(DATA.capture)
-        .then(function (r) {
-          return r.ok ? r.json() : null;
-        })
-        .catch(function () {
-          return null;
+          return "";
         }),
       fetch(DATA.sankeyEsMs)
         .then(function (r) {
@@ -282,19 +425,32 @@
         .catch(function () {
           return null;
         }),
+      fetch(DATA.schoolBoardDistricts)
+        .then(function (r) {
+          return r.ok ? r.json() : { type: "FeatureCollection", features: [] };
+        })
+        .catch(function () {
+          return { type: "FeatureCollection", features: [] };
+        }),
+      fetch(DATA.charterSchoolLocations)
+        .then(function (r) {
+          return r.ok ? r.json() : { type: "FeatureCollection", features: [] };
+        })
+        .catch(function () {
+          return { type: "FeatureCollection", features: [] };
+        }),
     ])
       .then(function (results) {
         var es = results[0];
         var ms = results[1];
         var hs = results[2];
-        var schools = results[3];
-        ENROLLMENT_CACHE = results[4];
-        FACILITY_CACHE = results[5];
-        DEMOGRAPHICS_CACHE = results[6];
-        CAPTURE_CACHE = results[7];
-        SANKEY_CACHE = results[8];
-        var studentHexFc = results[9];
-        var schoolParcelsRaw = results[10];
+        MASTER_BY_MSID = parseSchoolMasterCsv(results[4] || "");
+        var schools = enrichSchoolsFcWithMasterType(results[3]);
+        SANKEY_CACHE = results[5];
+        var studentHexFc = results[6];
+        var schoolParcelsRaw = results[7];
+        var schoolBoardFc = results[8];
+        var charterFc = results[9];
 
         var boundarySourceOpts = { type: "geojson", promoteId: "MSID" };
 
@@ -305,6 +461,42 @@
           type: "geojson",
           data: schools,
           promoteId: "SCHOOLS_ID",
+        });
+        map.addSource("school-board-districts", {
+          type: "geojson",
+          data: schoolBoardFc || { type: "FeatureCollection", features: [] },
+          promoteId: "OBJECTID",
+        });
+        map.addLayer({
+          id: "school-board-districts-fill",
+          type: "fill",
+          source: "school-board-districts",
+          paint: {
+            "fill-color": "#000000",
+            "fill-opacity": 0,
+          },
+          layout: { visibility: "none" },
+        });
+        map.addLayer({
+          id: "school-board-districts-outline",
+          type: "line",
+          source: "school-board-districts",
+          paint: {
+            "line-color": "#374151",
+            "line-width": [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              8,
+              2,
+              12,
+              2.5,
+              16,
+              3.5,
+            ],
+            "line-opacity": 0.95,
+          },
+          layout: { visibility: "none" },
         });
 
         map.addLayer({
@@ -391,6 +583,16 @@
           layout: schoolParcelLineLayout,
           paint: Object.assign({}, schoolParcelLinePaintBase, {
             "line-color": PALETTE.middle.line,
+          }),
+        });
+        map.addLayer({
+          id: "school-parcels-jr-sr",
+          type: "line",
+          source: "school-parcels",
+          filter: ["==", ["get", "_parcelLevel"], "jr_sr"],
+          layout: schoolParcelLineLayout,
+          paint: Object.assign({}, schoolParcelLinePaintBase, {
+            "line-color": PALETTE.jrSr.line,
           }),
         });
         map.addLayer({
@@ -557,13 +759,27 @@
               "HIGH",
               PALETTE.high.fill,
               "JR SR HIGH",
-              "#ea580c",
+              PALETTE.jrSr.fill,
               PALETTE.high.fill,
             ],
           }),
         });
+        map.addSource("charter-schools", {
+          type: "geojson",
+          data: charterFc || { type: "FeatureCollection", features: [] },
+          promoteId: "OBJECTID",
+        });
+        map.addLayer({
+          id: "schools-charter",
+          type: "circle",
+          source: "charter-schools",
+          filter: ["==", ["get", "TYPE"], "CHARTER"],
+          paint: Object.assign({}, schoolCirclePaint, {
+            "circle-color": PALETTE.charter.fill,
+          }),
+        });
 
-        ["schools-elementary", "schools-middle", "schools-high"].forEach(function (lid) {
+        ["schools-elementary", "schools-middle", "schools-high", "schools-charter"].forEach(function (lid) {
           if (map.getLayer(lid)) map.moveLayer(lid);
         });
 
@@ -573,6 +789,7 @@
         combined = mergeBbox(combined, computeBbox(hs));
         combined = mergeBbox(combined, computeBbox(schools));
         combined = mergeBbox(combined, computeBbox(schoolParcelsFc));
+        combined = mergeBbox(combined, computeBbox(charterFc));
 
         map.resize();
         if (combined) {
@@ -657,6 +874,22 @@
     return null;
   }
 
+  /**
+   * Parcel styling level: Jr/Sr (7–12) is separate from 9–12 high so parcels can use orange.
+   * Uses master CSV TYPE when present (same as school dots).
+   * @returns {"elementary"|"middle"|"high"|"jr_sr"|null}
+   */
+  function schoolParcelStripeLevel(sp) {
+    if (!sp) return null;
+    var spM = schoolPropsWithMasterType(sp);
+    var t = String(spM.TYPE || "").toUpperCase();
+    if (t === "JR SR HIGH") return "jr_sr";
+    if (t === "ELEMENTARY") return "elementary";
+    if (t === "MIDDLE") return "middle";
+    if (t === "HIGH") return "high";
+    return null;
+  }
+
   function buildFilteredSchoolParcelsFc(schoolsFc, parcelsFc) {
     var out = { type: "FeatureCollection", features: [] };
     if (!parcelsFc || !parcelsFc.features || !parcelsFc.features.length) {
@@ -671,7 +904,7 @@
       var sp = byMsid[msid];
       if (!sp) continue;
       if (schoolExcludedFromParcelOverlay(sp)) continue;
-      var lvl = schoolParcelLevelFromType(sp);
+      var lvl = schoolParcelStripeLevel(sp);
       if (!lvl) continue;
       var geom = ft.geometry;
       if (!geom || (geom.type !== "Polygon" && geom.type !== "MultiPolygon")) {
@@ -711,6 +944,11 @@
       gs.className = "toggle-gradient-strip";
       gs.setAttribute("aria-hidden", "true");
       label.appendChild(gs);
+    } else if (def.swatchVariant === "split-jr-sr") {
+      var swSplit = document.createElement("span");
+      swSplit.className = "swatch swatch--split-jr-sr";
+      swSplit.setAttribute("aria-hidden", "true");
+      label.appendChild(swSplit);
     } else if (def.swatchColor) {
       var sw = document.createElement("span");
       sw.className = "swatch";
@@ -718,7 +956,24 @@
       sw.setAttribute("aria-hidden", "true");
       label.appendChild(sw);
     }
-    label.appendChild(document.createTextNode(def.label));
+    if (def.sublabel) {
+      var stack = document.createElement("span");
+      stack.className = "toggle-label-stack";
+      var main = document.createElement("span");
+      main.className = "toggle-label-main";
+      main.textContent = def.label;
+      stack.appendChild(main);
+      var sub = document.createElement("span");
+      sub.className = "toggle-label-sub";
+      sub.textContent = def.sublabel;
+      stack.appendChild(sub);
+      label.appendChild(stack);
+    } else {
+      var mainOnly = document.createElement("span");
+      mainOnly.className = "toggle-label-main";
+      mainOnly.textContent = def.label;
+      label.appendChild(mainOnly);
+    }
     container.appendChild(label);
   }
 
@@ -741,6 +996,7 @@
       {
         id: "hs",
         label: "High",
+        sublabel: "(incl. Jr/Sr)",
         layerIds: ["hs-fill", "hs-outline"],
         swatchColor: PALETTE.high.fill,
         defaultChecked: false,
@@ -764,8 +1020,9 @@
       {
         id: "sch-hs",
         label: "High",
+        sublabel: "(incl. Jr/Sr)",
+        swatchVariant: "split-jr-sr",
         layerIds: ["schools-high"],
-        swatchColor: PALETTE.high.fill,
         defaultChecked: true,
       },
     ];
@@ -797,8 +1054,9 @@
       {
         id: "parcel-hs",
         label: "High",
-        layerIds: ["school-parcels-high"],
-        swatchColor: PALETTE.high.fill,
+        sublabel: "(incl. Jr/Sr)",
+        swatchVariant: "split-jr-sr",
+        layerIds: ["school-parcels-jr-sr", "school-parcels-high"],
         defaultChecked: false,
       },
     ];
@@ -828,15 +1086,63 @@
         }
       );
     }
+
+    var sbdEl = document.getElementById("school-board-district-toggles");
+    if (sbdEl) {
+      appendToggleRow(sbdEl, {
+        id: "school-board-districts",
+        label: "School board districts",
+        layerIds: ["school-board-districts-fill", "school-board-districts-outline"],
+        swatchColor: "#374151",
+        defaultChecked: false,
+      });
+    }
+
+    var charterEl = document.getElementById("charter-school-toggles");
+    if (charterEl) {
+      appendToggleRow(charterEl, {
+        id: "charter-schools",
+        label: "Charter schools",
+        layerIds: ["schools-charter"],
+        swatchColor: PALETTE.charter.fill,
+        defaultChecked: true,
+      });
+    }
   }
 
   var BOUNDARY_FILL_LAYERS = ["es-fill", "ms-fill", "hs-fill"];
-  var SCHOOL_LAYER_IDS = ["schools-elementary", "schools-middle", "schools-high"];
+  var SCHOOL_LAYER_IDS = [
+    "schools-elementary",
+    "schools-middle",
+    "schools-high",
+    "schools-charter",
+  ];
 
-  function fillLayerIdToSource(layerId) {
-    if (layerId === "es-fill") return "es-boundaries";
-    if (layerId === "ms-fill") return "ms-boundaries";
-    if (layerId === "hs-fill") return "hs-boundaries";
+  /** Topmost paint order first: used so queryRenderedFeatures returns the visually top feature first. */
+  var MAP_OVERLAY_HIT_LAYER_ORDER_TOP_FIRST = [
+    "schools-charter",
+    "schools-elementary",
+    "schools-middle",
+    "schools-high",
+    "student-hex-heatmap",
+    "school-parcels-elementary",
+    "school-parcels-jr-sr",
+    "school-parcels-middle",
+    "school-parcels-high",
+    "es-outline",
+    "ms-outline",
+    "hs-outline",
+    "es-fill",
+    "ms-fill",
+    "hs-fill",
+    "school-board-districts-outline",
+    "school-board-districts-fill",
+  ];
+
+  function boundaryLayerIdToSource(layerId) {
+    if (layerId === "es-fill" || layerId === "es-outline") return "es-boundaries";
+    if (layerId === "ms-fill" || layerId === "ms-outline") return "ms-boundaries";
+    if (layerId === "hs-fill" || layerId === "hs-outline") return "hs-boundaries";
     return null;
   }
 
@@ -869,27 +1175,95 @@
     return String(str).replace(/\belem\b/gi, "elementary");
   }
 
+  /**
+   * Excel/Sheets often turn grade ranges like 9-12 or 7-8 into serial dates (e.g. 12-Sep, 8-Jul).
+   * Normalizes those back to display ranges; pass through everything else.
+   */
+  function normalizeGradesServedForUi(raw) {
+    if (raw == null || raw === "") return "";
+    var t = String(raw).trim();
+    if (/^12-sep$/i.test(t)) return "9-12";
+    if (/^12-jul$/i.test(t)) return "7-12";
+    if (/^8-jul$/i.test(t)) return "7-8";
+    if (/^6-apr$/i.test(t)) return "4-6";
+    if (/^6-mar$/i.test(t)) return "3-6";
+    return t;
+  }
+
+  /** Spell out W. Melbourne in city names (GeoJSON / CSV city lines). */
+  function expandWestMelbourneCity(cityPart) {
+    return String(cityPart).replace(/^W\.\s*Melbourne\b/i, "West Melbourne");
+  }
+
   /** "CITY, ST 12345" → "City, ST 12345" */
   function formatCityStateZip(str) {
     if (!str) return "";
     var t = String(str).trim();
     var m = t.match(/^(.+),\s*([A-Za-z]{2})\s+(.+)$/);
     if (m) {
+      var cityExpanded = expandWestMelbourneCity(m[1].trim());
       return (
-        standardCapitalization(m[1].trim()) +
+        standardCapitalization(cityExpanded) +
         ", " +
         m[2].toUpperCase() +
         " " +
         m[3].trim()
       );
     }
-    return standardCapitalization(t);
+    return standardCapitalization(expandWestMelbourneCity(t));
+  }
+
+  /**
+   * UI polish for school display names (after standardCapitalization).
+   * Covers Jr/Sr high labels, Turner/Creel/Williams/West Melbourne wording from mixed sources.
+   */
+  function formatSchoolDisplayName(str) {
+    if (str == null || str === "") return "";
+    var s = String(str);
+    s = s.replace(/\bJunior\/Senior\b/gi, "Jr/Sr");
+    s = s.replace(/\bJr\.?\s+Sr\.?\b/gi, "Jr/Sr");
+    s = s.replace(/\bJR\s+SR\b/g, "Jr/Sr");
+    s = s.replace(/\bJr\/sr\b/g, "Jr/Sr");
+    s = s.replace(/,\s*Senior\b/gi, "");
+    s = s.replace(/\bJohn F\.\s*Turner\s*,\s*Senior\b/gi, "John F. Turner");
+    s = s.replace(/\bRalph M\s+Williams\b/gi, "Ralph M. Williams");
+    s = s.replace(/\bW\.j\./gi, "W.J.");
+    s = s.replace(/\bDr\.\s+W\.j\./gi, "Dr. W.J.");
+    s = s.replace(/\bW\.\s*Melbourne\b/gi, "West Melbourne");
+    return s;
+  }
+
+  /** Prefer data/school_master.csv over GeoJSON NAME/CommonName (district GIS can have typos). */
+  function schoolDisplayNamePreferMaster(p) {
+    if (!p || p.SCHOOLS_ID == null || !MASTER_BY_MSID) return null;
+    var sid = Number(p.SCHOOLS_ID);
+    if (isNaN(sid)) return null;
+    var m = masterRow(sid);
+    if (!m || !m.school_name) return null;
+    return formatSchoolDisplayName(
+      standardCapitalization(expandElemSchoolName(m.school_name))
+    );
+  }
+
+  /** Display name for map tooltips, dropdown, and sidebar (master CSV when present). */
+  function schoolDisplayNameFromProps(p) {
+    return (
+      schoolDisplayNamePreferMaster(p) ||
+      formatSchoolDisplayName(
+        standardCapitalization(
+          expandElemSchoolName(p.NAME || p.CommonName || "School")
+        )
+      )
+    );
   }
 
   function schoolDetailHtml(p) {
-    var rawName = p.NAME || p.CommonName || "School";
-    var name = standardCapitalization(expandElemSchoolName(rawName));
-    var grades = p.Grades || "";
+    var name = schoolDisplayNameFromProps(p);
+    var sid = p.SCHOOLS_ID != null ? Number(p.SCHOOLS_ID) : NaN;
+    var mRow = !isNaN(sid) ? masterRow(sid) : null;
+    var grades = normalizeGradesServedForUi(
+      (mRow && mRow.grades_served) || p.Grades || ""
+    );
     var addr = p.ADDRESS || "";
     var city = p.CITY_ST_ZI || "";
     var parts = [
@@ -923,9 +1297,7 @@
   var PRIORITY_SCHOOL_MSIDS = [3031, 1081, 2071];
 
   function schoolNameForSelect(p) {
-    return standardCapitalization(
-      expandElemSchoolName(p.NAME || p.CommonName || "School")
-    );
+    return schoolDisplayNameFromProps(p);
   }
 
   /** Fills #school-select; option values are SCHOOLS_ID (district MSID). */
@@ -973,8 +1345,8 @@
         return !priorityUsed[p.SCHOOLS_ID];
       })
       .sort(function (a, b) {
-        var na = expandElemSchoolName(a.NAME || a.CommonName || "").toLowerCase();
-        var nb = expandElemSchoolName(b.NAME || b.CommonName || "").toLowerCase();
+        var na = schoolDisplayNameFromProps(a).toLowerCase();
+        var nb = schoolDisplayNameFromProps(b).toLowerCase();
         if (na < nb) return -1;
         if (na > nb) return 1;
         return 0;
@@ -1213,25 +1585,6 @@
       .trim();
   }
 
-  /** @returns {null | { yearSchoolOpened: number|null, yearPropertyPurchased: number|null, ageAsOf2026: number|null }} */
-  function lookupFacilityForSchool(p) {
-    if (!FACILITY_CACHE || !FACILITY_CACHE.byNameKey || !p) return null;
-    var n = normalizeSchoolNameKey(p.NAME);
-    var keys = [
-      n,
-      normalizeSchoolNameKey(p.CommonName),
-    ];
-    if (n && n.indexOf("JR SR") >= 0 && n.indexOf("HIGH") < 0) {
-      keys.push(n + " HIGH");
-    }
-    for (var i = 0; i < keys.length; i++) {
-      if (!keys[i]) continue;
-      var row = FACILITY_CACHE.byNameKey[keys[i]];
-      if (row) return row;
-    }
-    return null;
-  }
-
   function schoolPaletteKeyFromType(typeStr) {
     var t = (typeStr || "").toUpperCase();
     if (t.indexOf("ELEMENTARY") >= 0) return "elementary";
@@ -1252,6 +1605,38 @@
     return false;
   }
 
+  /**
+   * Match Sankey workbook labels (short names in the helper spreadsheet) to GeoJSON.
+   * Uses compact CommonName equality and leading NAME tokens — not naive substring match —
+   * so "Cocoa" does not match "Cocoa Beach" (both NAMEs start with COCOA).
+   */
+  function sankeyWorkbookLabelMatchesSchool(label, p) {
+    var L = normalizeSchoolNameKey(label || "");
+    if (!L) return false;
+
+    var cn = normalizeSchoolNameKey(p.CommonName || "");
+    var nm = normalizeSchoolNameKey(p.NAME || "");
+
+    var Lc = L.replace(/\s+/g, "");
+    var cnc = cn.replace(/\s+/g, "");
+    if (cnc && Lc === cnc) return true;
+    if (cn && L === cn) return true;
+
+    var lTok = L.split(" ").filter(Boolean);
+    var nmTok = nm.split(" ").filter(Boolean);
+    if (!lTok.length || !nmTok.length || lTok.length > nmTok.length) return false;
+
+    for (var ti = 0; ti < lTok.length; ti++) {
+      if (lTok[ti] !== nmTok[ti]) return false;
+    }
+
+    if (lTok.length === 1 && nmTok.length >= 2) {
+      if (lTok[0] === "COCOA" && nmTok[1] === "BEACH") return false;
+    }
+
+    return true;
+  }
+
   /** Match Sankey workbook row/column labels (short names) to GeoJSON NAME/CommonName. */
   function sankeyElementaryLabelMatchesSchool(label, p) {
     var L = normalizeSchoolNameKey(label);
@@ -1268,21 +1653,15 @@
   }
 
   function sankeyMiddleLabelMatchesSchool(label, p) {
-    var L = normalizeSchoolNameKey(label);
-    var cn = normalizeSchoolNameKey(p.CommonName || "");
-    var nm = normalizeSchoolNameKey(p.NAME || "");
-    if (!L) return false;
-    if (cn && (L === cn || nm.indexOf(L) !== -1 || cn.indexOf(L) !== -1))
-      return true;
-    var parts = nm.split(" ").filter(Boolean);
-    if (parts.length && L === parts[0]) return true;
-    return false;
+    return sankeyWorkbookLabelMatchesSchool(label, p);
   }
 
   /**
    * @returns {{ elementary: string, middle: string, value: number, emphasis: boolean }[]}
    *   emphasis = flow is a primary focus for the selection (all ES→MS links when ES selected;
    *   ES→selected-MS when middle selected; other MS destinations from same feeders are emphasis:false).
+   *   For Jr/Sr (7–12): ES→MS flows that share feeder elementaries with middle schools that feed this high
+   *   (grades 6→7 transition); emphasis on links into those feeder middles.
    */
   function filterEsMsFlowsForSchool(flows, p) {
     if (!flows || !flows.length || !p) return [];
@@ -1323,19 +1702,38 @@
           };
         });
     }
+    if (t === "JR SR HIGH" && SANKEY_CACHE && SANKEY_CACHE.msHsFlows) {
+      var msHs = SANKEY_CACHE.msHsFlows;
+      var intoJrSr = msHs.filter(function (hf) {
+        return sankeyHighLabelMatchesSchool(hf.high, p);
+      });
+      if (!intoJrSr.length) return [];
+      var feederMiddles = {};
+      intoJrSr.forEach(function (hf) {
+        feederMiddles[hf.middle] = true;
+      });
+      var feederEs = {};
+      flows.forEach(function (f) {
+        if (feederMiddles[f.middle]) feederEs[f.elementary] = true;
+      });
+      return flows
+        .filter(function (f) {
+          return feederEs[f.elementary];
+        })
+        .map(function (f) {
+          return {
+            elementary: f.elementary,
+            middle: f.middle,
+            value: f.value,
+            emphasis: !!feederMiddles[f.middle],
+          };
+        });
+    }
     return [];
   }
 
   function sankeyHighLabelMatchesSchool(label, p) {
-    var L = normalizeSchoolNameKey(label);
-    var cn = normalizeSchoolNameKey(p.CommonName || "");
-    var nm = normalizeSchoolNameKey(p.NAME || "");
-    if (!L) return false;
-    if (cn && (L === cn || nm.indexOf(L) !== -1 || cn.indexOf(L) !== -1))
-      return true;
-    var parts = nm.split(" ").filter(Boolean);
-    if (parts.length && L === parts[0]) return true;
-    return false;
+    return sankeyWorkbookLabelMatchesSchool(label, p);
   }
 
   /**
@@ -1376,14 +1774,37 @@
     return [];
   }
 
+  function findSchoolPropsForSankeyWorkbookLabel(label, schoolsFc, useMiddleMatcher) {
+    if (!label || !schoolsFc || !schoolsFc.features) return null;
+    var matchFn = useMiddleMatcher
+      ? sankeyMiddleLabelMatchesSchool
+      : sankeyHighLabelMatchesSchool;
+    for (var i = 0; i < schoolsFc.features.length; i++) {
+      var p = schoolsFc.features[i].properties;
+      if (matchFn(label, p)) return p;
+    }
+    return null;
+  }
+
+  /** Middle → high Sankey: 7–12 / Jr–Sr nodes use orange; 9–12 high and middle use blue/purple. */
+  function msHsSankeyNodeFill(name, isLeft) {
+    var fc = GEO_CACHE.schools;
+    var p = findSchoolPropsForSankeyWorkbookLabel(name, fc, isLeft);
+    p = schoolPropsWithMasterType(p);
+    if (p && (p.TYPE || "").toUpperCase() === "JR SR HIGH") {
+      return PALETTE.jrSr.fill;
+    }
+    return isLeft ? PALETTE.middle.fill : PALETTE.high.fill;
+  }
+
   /**
    * @param {{ from: string, to: string, value: number, emphasis: boolean }[]} normFlows
-   * @param {{ leftFill: string, rightFill: string, emphStroke: string, ariaLabel: string, secondaryTooltip: string }} cfg
+   * @param {{ leftFill: string, rightFill: string, emphStroke: string, ariaLabel: string, secondaryTooltip: string, leftNodeFill?: function(string): string, rightNodeFill?: function(string): string }} cfg
    */
   function renderBipartiteSankey(root, normFlows, cfg) {
     if (!normFlows.length) {
       root.innerHTML =
-        '<p class="sankey-empty">No matching flows in SankeyFlowHelper for this selection.</p>';
+        '<p class="sankey-empty">No matching matriculation flows for this school selection.</p>';
       return;
     }
     if (typeof d3 === "undefined" || !d3.sankey || !d3.sankeyLinkHorizontal) {
@@ -1528,20 +1949,29 @@
 
     var gNodes = document.createElementNS(svgNs, "g");
     graph.nodes.forEach(function (d, i) {
+      var nm = String(d.name);
       var rect = document.createElementNS(svgNs, "rect");
       rect.setAttribute("x", d.x0);
       rect.setAttribute("y", d.y0);
       rect.setAttribute("width", Math.max(1, d.x1 - d.x0));
       rect.setAttribute("height", Math.max(1, d.y1 - d.y0));
       var isLeft = i < leftList.length;
-      rect.setAttribute(
-        "fill",
-        isLeft ? cfg.leftFill : cfg.rightFill
-      );
+      var nodeFill;
+      if (isLeft) {
+        nodeFill =
+          typeof cfg.leftNodeFill === "function"
+            ? cfg.leftNodeFill(nm)
+            : cfg.leftFill;
+      } else {
+        nodeFill =
+          typeof cfg.rightNodeFill === "function"
+            ? cfg.rightNodeFill(nm)
+            : cfg.rightFill;
+      }
+      rect.setAttribute("fill", nodeFill);
       rect.setAttribute("rx", "2");
       rect.setAttribute("class", "sankey-node");
       gNodes.appendChild(rect);
-      var nm = String(d.name);
       var tot = isLeft ? originTotal[nm] : destTotal[nm];
       var totStr =
         tot != null && !isNaN(Number(tot))
@@ -1591,7 +2021,8 @@
         '<p class="sankey-empty">Feeder flow data is not loaded.</p>';
       return;
     }
-    if (!schoolTypeIsElemOrMiddle(p.TYPE)) {
+    var typeU = (p.TYPE || "").toUpperCase();
+    if (!schoolTypeIsElemOrMiddle(p.TYPE) && typeU !== "JR SR HIGH") {
       el.innerHTML =
         '<p class="sankey-empty">No elementary–middle matrix for this school type.</p>';
       return;
@@ -1605,7 +2036,6 @@
         emphasis: f.emphasis !== false,
       };
     });
-    var typeU = (p.TYPE || "").toUpperCase();
     var selectedIsElem = typeU.indexOf("ELEMENTARY") >= 0;
     var emphStroke = selectedIsElem
       ? PALETTE.elementary.fill
@@ -1642,9 +2072,15 @@
     renderBipartiteSankey(el, norm, {
       leftFill: PALETTE.middle.fill,
       rightFill: PALETTE.high.fill,
+      leftNodeFill: function (name) {
+        return msHsSankeyNodeFill(name, true);
+      },
+      rightNodeFill: function (name) {
+        return msHsSankeyNodeFill(name, false);
+      },
       emphStroke: PALETTE.middle.fill,
       ariaLabel:
-        "Sankey diagram of student flows from middle schools to high schools",
+        "Sankey diagram of student flows from middle schools to high schools (grades 8 to 9 transition)",
       secondaryTooltip: "",
     });
   }
@@ -1689,9 +2125,10 @@
     var isElem = t.indexOf("ELEMENTARY") >= 0;
     var isMid = t.indexOf("MIDDLE") >= 0 && t.indexOf("HIGH") < 0;
     var isHigh = schoolTypeIsHigh(p.TYPE);
+    var isJrSr = t === "JR SR HIGH";
 
     row.className = "sankey-row";
-    if (isMid) {
+    if (isMid || (isHigh && isJrSr)) {
       row.classList.add("sankey-row--split");
     } else if (isElem) {
       row.classList.add("sankey-row--es-only");
@@ -1704,6 +2141,10 @@
       renderEsMsChart(elEs, p);
       elHs.innerHTML =
         '<p class="sankey-empty sankey-empty--muted">Middle → high transitions are not shown when an elementary school is selected.</p>';
+    } else if (isHigh && isJrSr) {
+      setSankeySplitLayout(true);
+      renderEsMsChart(elEs, p);
+      renderMsHsChart(elHs, p);
     } else if (isHigh) {
       setSankeySplitLayout(false);
       elEs.innerHTML =
@@ -1732,56 +2173,40 @@
   }
 
   function buildEnrollmentSeries(msid) {
-    if (!ENROLLMENT_CACHE || msid == null || isNaN(msid)) return [];
-    var key = String(msid);
-    var sy = ENROLLMENT_CACHE.byMsid && ENROLLMENT_CACHE.byMsid[key];
-    var cal =
-      ENROLLMENT_CACHE.calendarByMsid && ENROLLMENT_CACHE.calendarByMsid[key];
+    if (msid == null || isNaN(msid) || !MASTER_BY_MSID) return [];
+    var m = masterRow(msid);
+    if (!m) return [];
     var out = [];
 
-    if (cal) {
-      var years = Object.keys(cal)
-        .map(function (k) {
-          return parseInt(k, 10);
-        })
-        .filter(function (y) {
-          return !isNaN(y) && y >= 2010 && y <= 2025;
-        })
-        .sort(function (a, b) {
-          return a - b;
+    for (var y = 2010; y <= 2025; y++) {
+      var col = "enrollment_" + y;
+      var v = m[col];
+      if (v !== "" && v != null && !isNaN(Number(v))) {
+        out.push({
+          label: schoolYearLabelFromExcelYear(y),
+          value: Number(v),
+          segment: "enrollment",
         });
-      for (var i = 0; i < years.length; i++) {
-        var y = years[i];
-        var yk = String(y);
-        var v = cal[yk];
-        if (v != null && !isNaN(Number(v))) {
-          out.push({
-            label: schoolYearLabelFromExcelYear(y),
-            value: Number(v),
-            segment: "enrollment",
-          });
-        }
       }
     }
 
-    var labels = ENROLLMENT_CACHE.schoolYearLabels || [];
-    if (sy && sy.projected && labels.length) {
-      for (var j = 0; j < labels.length; j++) {
-        var pv = sy.projected[j];
-        if (pv != null && !isNaN(Number(pv))) {
-          out.push({
-            label: labels[j],
-            value: Number(pv),
-            segment: "projected",
-          });
-        }
+    var labels = MASTER_PROJECTION_LABELS || [];
+    for (var j = 0; j < labels.length; j++) {
+      var col = projectedColumnForSyLabel(labels[j]);
+      var pv = m[col];
+      if (pv !== "" && pv != null && !isNaN(Number(pv))) {
+        out.push({
+          label: labels[j],
+          value: Number(pv),
+          segment: "projected",
+        });
       }
     }
     return out;
   }
 
   function enrollmentLabelSortKey(label) {
-    var proj = ENROLLMENT_CACHE && ENROLLMENT_CACHE.schoolYearLabels;
+    var proj = MASTER_PROJECTION_LABELS;
     if (proj && proj.indexOf(label) >= 0) {
       return 10000 + proj.indexOf(label);
     }
@@ -1993,7 +2418,7 @@
     if (!root) return;
     var noDataMsg =
       options.noDataMsg ||
-      "No merged enrollment series from 2025-26 onward for the current selection (check workbook data).";
+      "No merged enrollment series from 2025-26 onward for the current selection (check data/school_master.csv).";
     if (!stacked.periods || !stacked.periods.length) {
       root.innerHTML =
         '<p class="enrollment-chart-empty">' + noDataMsg + "</p>";
@@ -2236,7 +2661,7 @@
     if (!root) return;
     var noDataMsg =
       options.noDataMsg ||
-      "No enrollment rows in the published workbook for this school.";
+      "No enrollment rows in data/school_master.csv for this school.";
     if (!series || !series.length) {
       root.innerHTML =
         '<p class="enrollment-chart-empty">' + noDataMsg + "</p>";
@@ -2375,9 +2800,9 @@
     var series = buildEnrollmentSeries(msid);
     renderEnrollmentChartIntoRoot(root, series, {
       noDataMsg:
-        "No enrollment rows in the published workbook for this school.",
+        "No enrollment rows in data/school_master.csv for this school.",
       noDataAria:
-        "Enrollment data is not available for this school in the workbook.",
+        "Enrollment data is not available for this school in data/school_master.csv.",
       ariaLabel:
         "Enrollment bar chart with periods for the selected school.",
     });
@@ -2556,15 +2981,15 @@
       lunchEl.innerHTML = emptySelect;
       return;
     }
-    if (!DEMOGRAPHICS_CACHE || !DEMOGRAPHICS_CACHE.byMsid) {
+    if (!MASTER_BY_MSID) {
       ethEl.innerHTML =
-        '<p class="demographics-pie-empty">Demographics data is not loaded.</p>';
+        '<p class="demographics-pie-empty">School master data is not loaded.</p>';
       lunchEl.innerHTML =
-        '<p class="demographics-pie-empty">Demographics data is not loaded.</p>';
+        '<p class="demographics-pie-empty">School master data is not loaded.</p>';
       return;
     }
-    var row = DEMOGRAPHICS_CACHE.byMsid[String(msid)];
-    if (!row) {
+    var objs = demographicsObjectsFromMaster(masterRow(msid));
+    if (!objs) {
       var msg =
         '<p class="demographics-pie-empty">No student rows for this school in the SY2025-26 export.</p>';
       ethEl.innerHTML = msg;
@@ -2572,10 +2997,10 @@
       return;
     }
 
-    var ethRes = buildPieChartHtml(row.ethnicity || {}, ethnicitySliceColor);
+    var ethRes = buildPieChartHtml(objs.ethnicity || {}, ethnicitySliceColor);
     ethEl.innerHTML = ethRes.html;
 
-    var lunchRes = buildPieChartHtml(row.lunchStatus || {}, function (label) {
+    var lunchRes = buildPieChartHtml(objs.lunchStatus || {}, function (label) {
       return lunchSliceColor(label);
     });
     lunchEl.innerHTML = lunchRes.html;
@@ -2593,17 +3018,17 @@
   function aggregateDemographicsMsidsWeighted(weighted) {
     var eth = {};
     var lunch = {};
-    if (!DEMOGRAPHICS_CACHE || !DEMOGRAPHICS_CACHE.byMsid) {
+    if (!MASTER_BY_MSID) {
       return { ethnicity: eth, lunchStatus: lunch };
     }
     for (var i = 0; i < weighted.length; i++) {
       var msid = weighted[i].msid;
       var wt = weighted[i].weight;
       if (msid == null || isNaN(msid) || wt == null || isNaN(wt)) continue;
-      var row = DEMOGRAPHICS_CACHE.byMsid[String(msid)];
-      if (!row) continue;
-      mergeCountObjScaled(eth, row.ethnicity || {}, wt);
-      mergeCountObjScaled(lunch, row.lunchStatus || {}, wt);
+      var objs = demographicsObjectsFromMaster(masterRow(msid));
+      if (!objs) continue;
+      mergeCountObjScaled(eth, objs.ethnicity || {}, wt);
+      mergeCountObjScaled(lunch, objs.lunchStatus || {}, wt);
     }
     return { ethnicity: eth, lunchStatus: lunch };
   }
@@ -2688,12 +3113,11 @@
   /** Same 2025 calendar column as main dashboard ’25-26 enrollment KPI. */
   function enrollment202526CalendarForMsid(msid) {
     if (msid == null || isNaN(msid)) return null;
-    var cal =
-      ENROLLMENT_CACHE &&
-      ENROLLMENT_CACHE.calendarByMsid &&
-      ENROLLMENT_CACHE.calendarByMsid[String(msid)];
-    if (cal && cal["2025"] != null && !isNaN(Number(cal["2025"]))) {
-      return Number(cal["2025"]);
+    var m = masterRow(msid);
+    if (!m) return null;
+    var v = m.enrollment_2025;
+    if (v !== "" && v != null && !isNaN(Number(v))) {
+      return Number(v);
     }
     return null;
   }
@@ -2738,7 +3162,7 @@
       );
       renderScenarioStackedEnrollmentChartIntoRoot(chartRoot, stacked, {
         noDataMsg:
-          "No merged enrollment series from 2025-26 onward for the current selection (check workbook data).",
+          "No merged enrollment series from 2025-26 onward for the current selection (check data/school_master.csv).",
         noDataAria: "Merged enrollment data is not available.",
         ariaLabel:
           "Stacked enrollment by middle school and feeder elementaries from 2025-26 forward.",
@@ -2748,7 +3172,7 @@
       series = filterEnrollmentSeriesScenarioFuture(series);
       renderEnrollmentChartIntoRoot(chartRoot, series, {
         noDataMsg:
-          "No merged enrollment series from 2025-26 onward for the current selection (check workbook data).",
+          "No merged enrollment series from 2025-26 onward for the current selection (check data/school_master.csv).",
         noDataAria: "Merged enrollment data is not available.",
         ariaLabel:
           "Merged K–8 enrollment bar chart from 2025-26 forward (scenario projection).",
@@ -2818,10 +3242,10 @@
             r.sankeyLabel +
             '" (MSID ' +
             r.msid +
-            ") has no enrollment workbook row."
+            ") has no enrollment row in data/school_master.csv."
         );
         warnings.push(
-          "No enrollment workbook row for \"" +
+          "No enrollment row in data/school_master.csv for \"" +
             escapeHtml(r.sankeyLabel) +
             "\" (MSID " +
             r.msid +
@@ -3046,29 +3470,53 @@
   function updateLeftPanelFromSchool(p) {
     var elP = document.getElementById("school-details-primary");
     var elS = document.getElementById("school-details-secondary");
+    var msid =
+      p.SCHOOLS_ID != null && p.SCHOOLS_ID !== ""
+        ? Number(p.SCHOOLS_ID)
+        : null;
+    var m = masterRow(msid);
+
     if (elP) {
-      var name = standardCapitalization(
-        expandElemSchoolName(p.NAME || p.CommonName || "")
-      );
-      var grades = p.Grades ? standardCapitalization(p.Grades) : "—";
-      var addr = p.ADDRESS ? standardCapitalization(p.ADDRESS) : "—";
-      elP.textContent = [name, grades, addr].join(" | ");
+      var name = schoolDisplayNameFromProps(p);
+      var grades = m
+        ? m.grades_served
+          ? standardCapitalization(normalizeGradesServedForUi(m.grades_served))
+          : "—"
+        : p.Grades
+          ? standardCapitalization(normalizeGradesServedForUi(p.Grades))
+          : "—";
+      var addrLine = "—";
+      if (m) {
+        var sa = m.address ? standardCapitalization(m.address) : "";
+        var sc = m.city_state_zip ? formatCityStateZip(m.city_state_zip) : "";
+        if (sa && sc) addrLine = sa + ", " + sc;
+        else if (sa) addrLine = sa;
+        else if (sc) addrLine = sc;
+      } else if (p.ADDRESS) {
+        addrLine = standardCapitalization(p.ADDRESS);
+      }
+      elP.textContent = [name, grades, addrLine].join(" | ");
       elP.classList.remove("school-details-placeholder");
     }
     if (elS) {
       var acres =
-        p.ACREAGE != null && p.ACREAGE !== "" ? String(p.ACREAGE) : "—";
-      var fac = lookupFacilityForSchool(p);
-      var opened =
-        fac && fac.yearSchoolOpened != null && !isNaN(Number(fac.yearSchoolOpened))
-          ? String(fac.yearSchoolOpened)
+        m && m.site_acres !== "" && m.site_acres != null
+          ? String(m.site_acres)
           : "—";
-      var age = "—";
-      if (fac && fac.ageAsOf2026 != null && !isNaN(Number(fac.ageAsOf2026))) {
-        age = String(fac.ageAsOf2026);
-      } else if (p.FacilityAg != null && p.FacilityAg !== "") {
-        age = String(p.FacilityAg);
-      }
+      var opened =
+        m &&
+        m.constructed_year !== "" &&
+        m.constructed_year != null &&
+        !isNaN(Number(m.constructed_year))
+          ? String(m.constructed_year)
+          : "—";
+      var age =
+        m &&
+        m.age_of_site_2026 !== "" &&
+        m.age_of_site_2026 != null &&
+        !isNaN(Number(m.age_of_site_2026))
+          ? String(m.age_of_site_2026)
+          : "—";
       elS.textContent =
         "Constructed: " +
         opened +
@@ -3077,40 +3525,25 @@
         " | Size of Site (Acres): " +
         acres;
       elS.classList.remove("school-details-placeholder");
-      if (fac) {
-        elS.title =
-          "Year opened and age as of 2026 from Age of all Facilities 2026; acres from map layer.";
-      } else {
-        elS.removeAttribute("title");
-      }
-    }
-    var msid =
-      p.SCHOOLS_ID != null && p.SCHOOLS_ID !== ""
-        ? Number(p.SCHOOLS_ID)
-        : null;
-    var enrollRow = null;
-    if (
-      ENROLLMENT_CACHE &&
-      ENROLLMENT_CACHE.byMsid &&
-      msid != null &&
-      !isNaN(msid)
-    ) {
-      enrollRow = ENROLLMENT_CACHE.byMsid[String(msid)];
+      elS.title =
+        "Constructed year, age as of 2026, and site size (acres) from data/school_master.csv.";
     }
 
     var capEl = document.getElementById("kpi-capacity");
     if (capEl) {
-      var capNum =
-        enrollRow &&
-        enrollRow.factoredCapacity202526 != null &&
-        !isNaN(Number(enrollRow.factoredCapacity202526))
-          ? Number(enrollRow.factoredCapacity202526)
-          : null;
+      var capNum = null;
+      if (
+        m &&
+        m.factored_capacity_2025_26 !== "" &&
+        m.factored_capacity_2025_26 != null
+      ) {
+        var cn = Number(m.factored_capacity_2025_26);
+        if (!isNaN(cn)) capNum = cn;
+      }
       if (capNum != null) {
         capEl.textContent = capNum.toLocaleString();
         capEl.classList.remove("kpi-value--placeholder");
-        capEl.title =
-          "2025-26 factored capacity (column J) from the enrollment workbook, not map GeoJSON.";
+        capEl.title = "2025-26 factored capacity from data/school_master.csv.";
       } else {
         capEl.textContent = "—";
         capEl.classList.add("kpi-value--placeholder");
@@ -3121,22 +3554,14 @@
     var enrollEl = document.getElementById("kpi-enrollment");
     if (enrollEl) {
       var cur = null;
-      if (
-        ENROLLMENT_CACHE &&
-        ENROLLMENT_CACHE.calendarByMsid &&
-        msid != null &&
-        !isNaN(msid)
-      ) {
-        var calRow = ENROLLMENT_CACHE.calendarByMsid[String(msid)];
-        if (calRow && calRow["2025"] != null && !isNaN(Number(calRow["2025"]))) {
-          cur = Number(calRow["2025"]);
-        }
+      if (m && m.enrollment_2025 !== "" && m.enrollment_2025 != null) {
+        var ev = Number(m.enrollment_2025);
+        if (!isNaN(ev)) cur = ev;
       }
       if (cur != null) {
         enrollEl.textContent = cur.toLocaleString();
         enrollEl.classList.remove("kpi-value--placeholder");
-        enrollEl.title =
-          "2025 calendar-year membership column from the enrollment workbook (not from map attributes).";
+        enrollEl.title = "2025 calendar-year membership from data/school_master.csv.";
       } else {
         enrollEl.textContent = "—";
         enrollEl.classList.add("kpi-value--placeholder");
@@ -3146,19 +3571,17 @@
 
     var utilEl = document.getElementById("kpi-utilization");
     if (utilEl) {
-      var utilPct =
-        enrollRow &&
-        enrollRow.utilization202526Pct != null &&
-        !isNaN(Number(enrollRow.utilization202526Pct))
-          ? Number(enrollRow.utilization202526Pct)
+      var utilDec =
+        m && m.utilization_2025_26 !== "" && m.utilization_2025_26 != null
+          ? Number(m.utilization_2025_26)
           : null;
-      if (utilPct != null) {
+      if (utilDec != null && !isNaN(utilDec)) {
+        var utilPctDisp = utilDec * 100;
         var utilStr =
-          utilPct % 1 === 0 ? String(utilPct) : utilPct.toFixed(1);
+          utilPctDisp % 1 === 0 ? String(utilPctDisp) : utilPctDisp.toFixed(1);
         utilEl.textContent = utilStr + "%";
         utilEl.classList.remove("kpi-value--placeholder");
-        utilEl.title =
-          "2025-26 actual utilization % (column Q) from the enrollment workbook.";
+        utilEl.title = "2025-26 utilization (decimal in CSV, shown as percent).";
       } else {
         utilEl.textContent = "—";
         utilEl.classList.add("kpi-value--placeholder");
@@ -3168,27 +3591,21 @@
 
     renderEnrollmentChart(msid);
     renderDemographicsCharts(msid);
-    renderSankeyPanel(p);
+    renderSankeyPanel(schoolPropsWithMasterType(p));
     var captureEl = document.getElementById("kpi-capture");
     if (captureEl) {
-      var capRow =
-        CAPTURE_CACHE &&
-        CAPTURE_CACHE.byMsid &&
-        CAPTURE_CACHE.byMsid[String(msid)];
-      var capKey = schoolPaletteKeyFromType(p.TYPE);
-      var bucket = capRow && capRow[capKey];
-      var pct =
-        bucket &&
-        bucket.captureRatePct != null &&
-        !isNaN(Number(bucket.captureRatePct))
-          ? Number(bucket.captureRatePct)
+      var capDec2 =
+        m && m.capture_rate !== "" && m.capture_rate != null
+          ? Number(m.capture_rate)
           : null;
-      if (pct != null) {
-        var capStr = pct % 1 === 0 ? String(pct) : pct.toFixed(1);
-        captureEl.textContent = capStr + "%";
+      if (capDec2 != null && !isNaN(capDec2)) {
+        var pctDisp = capDec2 * 100;
+        var capStr2 =
+          pctDisp % 1 === 0 ? String(pctDisp) : pctDisp.toFixed(1);
+        captureEl.textContent = capStr2 + "%";
         captureEl.classList.remove("kpi-value--placeholder");
         captureEl.title =
-          "Students attending this school (col A) vs. students zoned here (V/W/Y) within the same grade band; from SY2025-26 StuData export.";
+          "Attendance boundary capture rate from data/school_master.csv (decimal fraction).";
       } else {
         captureEl.textContent = "—";
         captureEl.classList.add("kpi-value--placeholder");
@@ -3273,6 +3690,14 @@
       offset: 10,
     });
 
+    var schoolBoardHoverPopup = new maplibregl.Popup({
+      closeButton: false,
+      closeOnClick: false,
+      maxWidth: "260px",
+      className: "school-board-hover-popup",
+      offset: 12,
+    });
+
     var schoolClickPopup = new maplibregl.Popup({
       closeButton: true,
       closeOnClick: true,
@@ -3313,6 +3738,7 @@
       clearOutlineHighlight();
       clearHoverRing();
       boundaryHoverPopup.remove();
+      schoolBoardHoverPopup.remove();
       map.getCanvas().style.cursor = "";
     }
 
@@ -3325,6 +3751,8 @@
       var raw;
       if (msid != null && !isNaN(msid) && schoolByMsid[msid]) {
         var sp = schoolByMsid[msid];
+        var fromMaster = schoolDisplayNamePreferMaster(sp);
+        if (fromMaster) return fromMaster;
         raw = sp.NAME || sp.CommonName || String(msid);
       } else {
         raw =
@@ -3333,39 +3761,123 @@
           props.High_Commo ||
           "Assignment area";
       }
-      return standardCapitalization(expandElemSchoolName(raw));
+      return formatSchoolDisplayName(
+        standardCapitalization(expandElemSchoolName(raw))
+      );
+    }
+
+    function schoolBoardDistrictHtml(props) {
+      var rawName = props && props.NAME != null ? String(props.NAME) : "";
+      var rawMember = props && props.SchBoardMe != null ? String(props.SchBoardMe) : "";
+      var name = escapeHtml(standardCapitalization(rawName || "District"));
+      var member = rawMember ? escapeHtml(standardCapitalization(rawMember)) : "";
+      return (
+        '<div class="school-board-hover-inner">' +
+        '<div class="school-board-hover-title">' +
+        name +
+        "</div>" +
+        (member ? '<div class="school-board-hover-member">' + member + "</div>" : "") +
+        "</div>"
+      );
+    }
+
+    function visibleOverlayHitLayers() {
+      var out = [];
+      for (var i = 0; i < MAP_OVERLAY_HIT_LAYER_ORDER_TOP_FIRST.length; i++) {
+        var lid = MAP_OVERLAY_HIT_LAYER_ORDER_TOP_FIRST[i];
+        try {
+          if (map.getLayer(lid) && map.getLayoutProperty(lid, "visibility") === "visible") {
+            out.push(lid);
+          }
+        } catch (err) {
+          /* ignore */
+        }
+      }
+      return out;
     }
 
     map.on("mousemove", function (e) {
-      var schoolFeats = map.queryRenderedFeatures(e.point, {
-        layers: SCHOOL_LAYER_IDS,
-      });
-      if (schoolFeats.length) {
+      var hitLayers = visibleOverlayHitLayers();
+      if (!hitLayers.length) {
         clearBoundaryHoverUi();
-        var p = schoolFeats[0].properties;
+        clearSchoolHoverUi();
+        refreshAssignmentBoundaryHighlight();
+        return;
+      }
+
+      var feats = map.queryRenderedFeatures(e.point, { layers: hitLayers });
+      if (!feats.length) {
+        clearBoundaryHoverUi();
+        clearSchoolHoverUi();
+        refreshAssignmentBoundaryHighlight();
+        return;
+      }
+
+      var top = feats[0];
+      var layerId = top.layer.id;
+
+      if (
+        layerId === "schools-elementary" ||
+        layerId === "schools-middle" ||
+        layerId === "schools-high" ||
+        layerId === "schools-charter"
+      ) {
+        clearBoundaryHoverUi();
+        var p = top.properties;
         map.getCanvas().style.cursor = "pointer";
         schoolHoverPopup.setLngLat(e.lngLat).setHTML(schoolDetailHtml(p)).addTo(map);
         refreshAssignmentBoundaryHighlight();
         return;
       }
 
-      clearSchoolHoverUi();
-
-      var feats = map.queryRenderedFeatures(e.point, {
-        layers: BOUNDARY_FILL_LAYERS,
-      });
-      if (!feats.length) {
+      if (layerId === "student-hex-heatmap") {
         clearBoundaryHoverUi();
+        clearSchoolHoverUi();
+        map.getCanvas().style.cursor = "";
         refreshAssignmentBoundaryHighlight();
         return;
       }
 
-      var f = feats[0];
+      if (
+        layerId === "school-parcels-high" ||
+        layerId === "school-parcels-jr-sr" ||
+        layerId === "school-parcels-middle" ||
+        layerId === "school-parcels-elementary"
+      ) {
+        clearBoundaryHoverUi();
+        clearSchoolHoverUi();
+        map.getCanvas().style.cursor = "";
+        refreshAssignmentBoundaryHighlight();
+        return;
+      }
+
+      if (layerId === "school-board-districts-fill" || layerId === "school-board-districts-outline") {
+        clearBoundaryHoverUi();
+        clearSchoolHoverUi();
+        map.getCanvas().style.cursor = "pointer";
+        schoolBoardHoverPopup
+          .setLngLat(e.lngLat)
+          .setHTML(schoolBoardDistrictHtml(top.properties))
+          .addTo(map);
+        refreshAssignmentBoundaryHighlight();
+        return;
+      }
+
+      if (BOUNDARY_FILL_LAYERS.indexOf(layerId) === -1 && boundaryLayerIdToSource(layerId) == null) {
+        clearBoundaryHoverUi();
+        clearSchoolHoverUi();
+        refreshAssignmentBoundaryHighlight();
+        return;
+      }
+
+      clearSchoolHoverUi();
+      schoolBoardHoverPopup.remove();
+
+      var f = top;
       var props = f.properties;
-      var layerId = f.layer.id;
       var msid = props.MSID != null ? Number(props.MSID) : null;
       if (msid != null && isNaN(msid)) msid = null;
-      var src = fillLayerIdToSource(layerId);
+      var src = boundaryLayerIdToSource(layerId);
 
       var hoveringDifferentAssignment =
         msid != null &&
