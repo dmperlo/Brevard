@@ -1,10 +1,13 @@
 # Reads "Age of all Facilities 2026.xls" and writes data/processed/facility_age.json
 # Sheet "SchoolAge2024": row 1 title, row 2 headers, data from row 3. No MSID column — keys are normalized NAME.
 param(
-  [string] $SourcePath = "P:\0109260\Planning\WorkingFiles\03_Client Data & Resources\03_Facility & Site Data\02_General Facility & Site Info\Age of all Facilities 2026.xls"
+  [string] $SourcePath = ""
 )
 
 $ErrorActionPreference = "Stop"
+if ([string]::IsNullOrWhiteSpace($SourcePath)) {
+  Write-Error "Pass -SourcePath to your local copy of the facility age workbook (.xls)."
+}
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $outPath = Join-Path $repoRoot "data\processed\facility_age.json"
 

@@ -2,11 +2,15 @@
 One-time / optional regeneration of data/school_master.csv from legacy JSON exports.
 The dashboard reads data/school_master.csv as the sole source of tabular stats.
 
-Grades served (grades_served column): When editing the CSV in Excel, format that column
-as Text before typing ranges like 9-12 or 7-8, or Excel may convert them to dates and
-save as "12-Sep", "8-Jul", etc. Alternatively use a Unicode en dash between numbers
-(e.g. 9–12) which is usually left as text. The dashboard also normalizes common
-mis-exports in normalizeGradesServedForUi (app.js).
+    Grades served (grades_served column): When editing the CSV in Excel, format that column
+    as Text before typing ranges like 9-12 or 7-8, or Excel may convert them to dates and
+    save as "12-Sep", "8-Jul", etc. Alternatively use a Unicode en dash between numbers
+    (e.g. 9–12) which is usually left as text. The dashboard also normalizes common
+    mis-exports in normalizeGradesServedForUi (app.js).
+
+    last_major_renovation_year is not produced by this script by default; run
+    scripts/merge_last_major_renovation_from_flatfile.py after build to populate from the
+    district flat file (or leave blank / merge manually).
 """
 from __future__ import annotations
 
@@ -26,7 +30,6 @@ ETH_SLUGS = [
     ("Amer. Indian or Alaskan Native", "eth_amer_indian_or_alaskan_native"),
     ("Multi-Racial", "eth_multi_racial"),
     ("White, Non-Hispanic", "eth_white_non_hispanic"),
-    ("Unknown", "eth_unknown"),
 ]
 
 LUNCH_SLUGS = [
@@ -100,6 +103,13 @@ def palette_key_from_level(level: str) -> str:
     return "high"
 
 
+def out_num(v):
+    """Write enrollment / demographic counts: empty only when missing; keep 0 as 0."""
+    if v is None:
+        return ""
+    return v
+
+
 def main():
     ms_lookup = load_msid_lookup(ROOT / "MSID_Lookup.csv")
 
@@ -147,8 +157,9 @@ def main():
         "grades_served",
         "address",
         "city_state_zip",
-        "constructed_year",
+        "opened_year",
         "age_of_site_2026",
+        "last_major_renovation_year",
         "site_acres",
     ]
     for y in CAL_YEARS:
@@ -234,27 +245,28 @@ def main():
             "grades_served": grades,
             "address": addr,
             "city_state_zip": city,
-            "constructed_year": "" if y_open is None else y_open,
+            "opened_year": "" if y_open is None else y_open,
             "age_of_site_2026": "" if age_2026 is None else age_2026,
+            "last_major_renovation_year": "",
             "site_acres": "" if acres is None or acres == "" else acres,
-            "sy2526_actual": "" if sy2526 is None else sy2526,
-            "factored_capacity_2025_26": "" if fc is None else fc,
+            "sy2526_actual": out_num(sy2526),
+            "factored_capacity_2025_26": out_num(fc),
             "utilization_2025_26": util_dec,
             "capture_rate": cap_dec,
         }
 
         for y in CAL_YEARS:
             v = cal.get(str(y))
-            row[f"enrollment_{y}"] = "" if v is None else v
+            row[f"enrollment_{y}"] = out_num(v)
 
         for i, lab in enumerate(PROJ_LABELS):
             pv = proj[i] if i < len(proj) else None
-            row["projected_" + lab.replace("-", "_")] = "" if pv is None else pv
+            row["projected_" + lab.replace("-", "_")] = out_num(pv)
 
         for label, slug in ETH_SLUGS:
-            row[slug] = eth_src.get(label, "")
+            row[slug] = out_num(eth_src.get(label))
         for label, slug in LUNCH_SLUGS:
-            row[slug] = lunch_src.get(label, "")
+            row[slug] = out_num(lunch_src.get(label))
 
         out_rows.append(row)
 

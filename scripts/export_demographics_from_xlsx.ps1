@@ -1,10 +1,13 @@
 # Aggregates student SY2025-26 data into data/processed/demographics_by_msid.json
 # Column A = Enrolled School ("MSID - Name"), H = Ethnicity, I = lunch_status (empty = not free/reduced).
 param(
-  [string] $SourcePath = "P:\0109260\Planning\WorkingFiles\03_Client Data & Resources\04_Student & Program Data\SY2025-26_StuData251010wSA (1).xlsx"
+  [string] $SourcePath = ""
 )
 
 $ErrorActionPreference = "Stop"
+if ([string]::IsNullOrWhiteSpace($SourcePath)) {
+  Write-Error "Pass -SourcePath to your local copy of the SY2025-26 student workbook."
+}
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $outPath = Join-Path $repoRoot "data\processed\demographics_by_msid.json"
 

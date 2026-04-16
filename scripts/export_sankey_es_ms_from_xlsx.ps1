@@ -5,16 +5,19 @@
 # Skips Grand Total rows/columns.
 #
 param(
-  [string] $SourcePath = "P:\0109260\Planning\WorkingFiles\03_Client Data & Resources\04_Student & Program Data\01_Enrollment & Demographics\SankeyFlowHelper.xlsx",
+  [string] $SourcePath = "",
   [string] $SheetName = "Sheet1",
-  [int] $EsMsFirstRow = 3,
-  [int] $EsMsLastRow = 54,
-  [int] $MsHsHeaderRow = 57,
-  [int] $MsHsFirstRow = 59,
-  [int] $MsHsLastRow = 73
+    [int] $EsMsFirstRow = 3,
+    [int] $EsMsLastRow = 54,
+    [int] $MsHsHeaderRow = 57,
+    [int] $MsHsFirstRow = 59,
+    [int] $MsHsLastRow = 73
 )
 
 $ErrorActionPreference = "Stop"
+if ([string]::IsNullOrWhiteSpace($SourcePath)) {
+  Write-Error "Pass -SourcePath to your local copy of SankeyFlowHelper.xlsx."
+}
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $outPath = Join-Path $repoRoot "data\processed\sankey_es_ms.json"
 

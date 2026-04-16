@@ -537,6 +537,12 @@ body:not(.dashboard-unlocked) {
   font-weight: 600;
 }
 
+.kpi-value--choice-na {
+  font-size: 0.95rem;
+  line-height: 1.25;
+  font-weight: 600;
+}
+
 .kpi-value--placeholder {
   color: #c41e3a;
 }
@@ -1048,6 +1054,12 @@ body:not(.dashboard-unlocked) {
   box-shadow: 0 0 0 1px #d1d5db;
 }
 
+.basemap-segmented--triple button {
+  padding: 6px 8px;
+  font-size: 0.78rem;
+  max-width: 5.75rem;
+}
+
 .layer-sections {
   display: flex;
   flex-direction: column;
@@ -1169,18 +1181,18 @@ body:not(.dashboard-unlocked) {
   height: 100%;
 }
 
-.maplibregl-ctrl {
+.mapboxgl-ctrl {
   font-family: "Franklin Gothic Medium", "Franklin Gothic", "ITC Franklin Gothic",
     "Libre Franklin", "Arial Narrow", sans-serif;
 }
 
-.maplibregl-popup-content {
+.mapboxgl-popup-content {
   font-size: 13px;
   max-width: 280px;
   line-height: 1.4;
 }
 
-.maplibregl-popup-content .popup-school-name {
+.mapboxgl-popup-content .popup-school-name {
   display: block;
   margin-bottom: 4px;
   font-family: "Franklin Gothic Medium", "Franklin Gothic", "ITC Franklin Gothic",
@@ -1188,20 +1200,20 @@ body:not(.dashboard-unlocked) {
   font-weight: 600;
 }
 
-.maplibregl-popup-content .popup-detail {
+.mapboxgl-popup-content .popup-detail {
   font-family: "Franklin Gothic Book", "Franklin Gothic", "Libre Franklin", "Arial Narrow",
     sans-serif;
   font-size: 12px;
   font-weight: 400;
 }
 
-.boundary-hover-popup .maplibregl-popup-content {
+.boundary-hover-popup .mapboxgl-popup-content {
   padding: 6px 10px;
   font-size: 12px;
   font-weight: 600;
 }
 
-.school-board-hover-popup .maplibregl-popup-content {
+.school-board-hover-popup .mapboxgl-popup-content {
   padding: 6px 10px;
   line-height: 1.35;
 }
@@ -1221,6 +1233,6 @@ body:not(.dashboard-unlocked) {
   font-size: 11px;
 }
 
-.school-hover-popup .maplibregl-popup-content {
+.school-hover-popup .mapboxgl-popup-content {
   padding: 8px 10px;
 }

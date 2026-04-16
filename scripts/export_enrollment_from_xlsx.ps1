@@ -1,12 +1,15 @@
 # Reads Brevard projected enrollment workbook and writes data/processed/enrollment.json
-# Requires Excel installed (COM). Source path can be overridden:
-#   .\export_enrollment_from_xlsx.ps1 -SourcePath 'P:\...\file.xlsx'
+# Requires Excel installed (COM). Example:
+#   .\export_enrollment_from_xlsx.ps1 -SourcePath 'C:\path\to\5-A_25-26...xlsx'
 
 param(
-  [string] $SourcePath = "P:\0109260\Planning\WorkingFiles\03_Client Data & Resources\04_Student & Program Data\01_Enrollment & Demographics\5-A_25-26 to 30-31_Projected Enrollment Updated 260121.xlsx"
+  [string] $SourcePath = ""
 )
 
 $ErrorActionPreference = "Stop"
+if ([string]::IsNullOrWhiteSpace($SourcePath)) {
+  Write-Error "Pass -SourcePath to your local copy of the projected enrollment workbook."
+}
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $outPath = Join-Path $repoRoot "data\processed\enrollment.json"
 

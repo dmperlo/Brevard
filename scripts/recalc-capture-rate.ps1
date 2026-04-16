@@ -1,6 +1,7 @@
 # Recalculates capture_rate in data/school_master.csv as sy2526_actual / zoned_denominator.
 # Denominators come from data/processed/capture_by_msid.json (student-level zoned counts).
 # StudentHexagons.geojson in this repo has no ELEM_/MID_/HIGH_ fields; see capture JSON notes.
+# MSIDs 2031 and 2041 (Meadowlane) are skipped: use data/processed/meadowlane_capture_override.json + app logic.
 
 $ErrorActionPreference = "Stop"
 # Project root = parent of scripts/
@@ -53,6 +54,7 @@ $updated = 0
 $cleared = 0
 
 foreach ($r in $rows) {
+  if ($r.msid -eq "2031" -or $r.msid -eq "2041") { continue }
   $lvl = if ($r.school_level) { $r.school_level.Trim().ToLowerInvariant() } else { "" }
   $numStr = $r.sy2526_actual
   if ([string]::IsNullOrWhiteSpace($numStr)) {

@@ -11,7 +11,7 @@
       rel="stylesheet"
     />
     <link
-      href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css"
+      href="https://api.mapbox.com/mapbox-gl-js/v3.8.0/mapbox-gl.css"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="styles.css" />
@@ -102,9 +102,9 @@
               id="download-school-master-btn"
               class="sidebar-download-csv"
               title="Download school_master.csv (enrollment, capacity, utilization, demographics)"
-              aria-label="Download school_master.csv"
+              aria-label="Download data as CSV (school_master.csv)"
             >
-              Download CSV
+              Download Data as CSV
             </button>
           </div>
         </header>
@@ -129,7 +129,7 @@
             </p>
             <p class="school-details-line school-details-meta">
               <span id="school-details-secondary" class="school-details-text school-details-placeholder"
-                >Constructed: 19XX | Age of Site: XX | Size of Site (Acres): XX</span
+                >Opened: 19XX | Age of Site: XX | Year of Last Major Renovation: — | Size of Site (Acres): XX</span
               >
             </p>
           </div>
@@ -156,14 +156,14 @@
         </section>
 
         <section class="enrollment-chart-panel" aria-label="Enrollment history and projections">
-          <h2 class="enrollment-chart-heading">Enrollment over time</h2>
+          <h2 class="enrollment-chart-heading" id="main-enrollment-chart-heading">Enrollment over time</h2>
           <div id="enrollment-chart" class="enrollment-chart" aria-live="polite">
             <p class="enrollment-chart-empty">Select a school to view enrollment trends.</p>
           </div>
         </section>
 
         <section class="sankey-panel" id="sankey-panel" aria-label="Feeder school transitions">
-          <h2 class="sankey-heading">Feeder Flows by Transition, 2024-25 to 2025-26</h2>
+          <h2 class="sankey-heading">Feeder Flows by Assignment Area Boundary, 2024-25 to 2025-26</h2>
           <div id="sankey-row" class="sankey-row" aria-live="polite">
             <div class="sankey-col sankey-col--es-ms">
               <h3 class="sankey-subheading">Grades 6→7 (elementary → middle)</h3>
@@ -182,7 +182,7 @@
 
         <section class="demographics-row" aria-label="Demographics charts">
           <div class="demographics-chart-card">
-            <h3 class="demographics-chart-title">Race and Ethnicity</h3>
+            <h3 class="demographics-chart-title" id="demographics-ethnicity-heading">Race and Ethnicity</h3>
             <div
               id="demographics-ethnicity"
               class="demographics-chart-body"
@@ -194,7 +194,7 @@
             </div>
           </div>
           <div class="demographics-chart-card">
-            <h3 class="demographics-chart-title">Free and Reduced Lunch</h3>
+            <h3 class="demographics-chart-title" id="demographics-lunch-heading">Free and Reduced Lunch</h3>
             <div
               id="demographics-lunch"
               class="demographics-chart-body"
@@ -224,7 +224,17 @@
           <div class="school-details scenario-school-details" aria-live="polite">
             <p class="school-details-line">
               <span id="scenario-details-primary" class="school-details-text school-details-placeholder"
-                >Select a middle school for a merged K–8 scenario summary.</span
+                >Name of School | Grades Served | Address</span
+              >
+            </p>
+            <p class="school-details-line school-details-meta">
+              <span id="scenario-details-secondary" class="school-details-text school-details-placeholder"
+                >Opened: 19XX | Age of Site: XX | Year of Last Major Renovation: — | Size of Site (Acres): XX</span
+              >
+            </p>
+            <p class="school-details-line school-details-meta">
+              <span id="scenario-details-kpi" class="school-details-text school-details-placeholder"
+                >'25-26 Enrollment: — | Factored Capacity: — | Utilization: — | Attendance Boundary Capture Rate: —</span
               >
             </p>
           </div>
@@ -343,9 +353,12 @@
               id="basemap-toggle"
             >
               <span class="basemap-label">Basemap</span>
-              <div class="basemap-segmented">
-                <button type="button" data-basemap="streets" class="is-active" aria-pressed="true">
-                  Map
+              <div class="basemap-segmented basemap-segmented--triple" role="group">
+                <button type="button" data-basemap="light" class="is-active" aria-pressed="true">
+                  Light
+                </button>
+                <button type="button" data-basemap="streets" aria-pressed="false">
+                  Streets
                 </button>
                 <button type="button" data-basemap="satellite" aria-pressed="false">
                   Satellite
@@ -357,7 +370,7 @@
         <div id="map" role="application" aria-label="Interactive map"></div>
       </div>
     </div>
-    <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+    <script src="https://api.mapbox.com/mapbox-gl-js/v3.8.0/mapbox-gl.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
     <script src="https://unpkg.com/d3-sankey@0.12.3/dist/d3-sankey.min.js"></script>
     <script>

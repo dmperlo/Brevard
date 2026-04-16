@@ -9,12 +9,15 @@
 # Grade column: auto-detected from row 1 (header matches grade / grd / instr gr); override with -GradeColumn 4 for column D.
 #
 param(
-  [string] $SourcePath = "P:\0109260\Planning\WorkingFiles\03_Client Data & Resources\04_Student & Program Data\SY2025-26_StuData251010wSA (1).xlsx",
+  [string] $SourcePath = "",
   [int] $GradeColumn = 0,
   [string] $SheetName = "Student251010wSA"
 )
 
 $ErrorActionPreference = "Stop"
+if ([string]::IsNullOrWhiteSpace($SourcePath)) {
+  Write-Error "Pass -SourcePath to your local copy of the SY2025-26 student workbook (e.g. ...\StuData....xlsx)."
+}
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $outPath = Join-Path $repoRoot "data\processed\capture_by_msid.json"
 
