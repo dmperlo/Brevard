@@ -12,6 +12,7 @@
     studentHexagons: "geo/StudentHexagons.geojson",
     schoolParcels: "geo/SchoolParcels.geojson",
     schoolBoardDistricts: "geo/SchoolBoardDistricts.geojson",
+    municipalBoundaries: "geo/MunicipalBoundaries.geojson",
     charterSchoolLocations: "geo/CharterSchoolLocations.geojson",
     /** Meadowlane Primary/Intermediate grade-band capture overrides (see notes inside file). */
     meadowlaneCaptureOverride: "data/processed/meadowlane_capture_override.json",
@@ -25,6 +26,8 @@
     streets: "mapbox://styles/mapbox/streets-v12",
     satellite: "mapbox://styles/mapbox/satellite-v9",
   };
+  /** Sentinel for municipal hover line layer filter when nothing is highlighted. */
+  var MUN_HOVER_FILTER_OFF = "__mun_hover_off__";
   /** Cached Promise.all results so basemap style switches can re-add GeoJSON layers. */
   var geoJsonDataCache = null;
   /** Meadowlane 2031/2041 capture numerators/denominators; null until fetch completes. */
@@ -345,6 +348,7 @@
     var schoolParcelsRaw = results[7];
     var schoolBoardFc = results[8];
     var charterFc = results[9];
+    var municipalFc = results[11];
 
     if (studentHexFc && studentHexFc.features && studentHexFc.features.length) {
       STUDENT_HEX_INDEX = buildStudentHexIndex(studentHexFc);
@@ -365,6 +369,9 @@
     map.getSource("schools").setData(schools);
     map.getSource("school-board-districts").setData(
       schoolBoardFc || { type: "FeatureCollection", features: [] }
+    );
+    map.getSource("municipal-boundaries").setData(
+      municipalFc || { type: "FeatureCollection", features: [] }
     );
     map.getSource("school-parcels").setData(schoolParcelsFc);
     map.getSource("charter-schools").setData(
@@ -432,6 +439,7 @@
     var schoolParcelsRaw = results[7];
     var schoolBoardFc = results[8];
     var charterFc = results[9];
+    var municipalFc = results[11];
 
     if (map.getSource("es-boundaries")) {
       refreshGeoJsonSourcesAfterStyleReload(results, {
@@ -450,6 +458,11 @@
           data: schools,
           promoteId: "SCHOOLS_ID",
         });
+        map.addSource("municipal-boundaries", {
+          type: "geojson",
+          data: municipalFc || { type: "FeatureCollection", features: [] },
+        });
+
         map.addSource("school-board-districts", {
           type: "geojson",
           data: schoolBoardFc || { type: "FeatureCollection", features: [] },
@@ -483,6 +496,61 @@
               3.5,
             ],
             "line-opacity": 0.95,
+          },
+          layout: { visibility: "none" },
+        });
+
+        map.addLayer({
+          id: "municipal-boundaries-fill",
+          type: "fill",
+          source: "municipal-boundaries",
+          paint: {
+            "fill-color": "#000000",
+            "fill-opacity": 0,
+          },
+          layout: { visibility: "none" },
+        });
+        map.addLayer({
+          id: "municipal-boundaries-outline",
+          type: "line",
+          source: "municipal-boundaries",
+          paint: {
+            "line-color": "#9ca3af",
+            "line-width": [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              8,
+              1.35,
+              12,
+              1.75,
+              16,
+              2.5,
+            ],
+            "line-opacity": 0.95,
+          },
+          layout: { visibility: "none" },
+        });
+        /** Hover stroke only: filter toggled on mousemove. Placed above assignment fills after `moveLayer` below. */
+        map.addLayer({
+          id: "municipal-boundaries-hover",
+          type: "line",
+          source: "municipal-boundaries",
+          filter: ["==", ["to-string", ["get", "OBJECTID"]], MUN_HOVER_FILTER_OFF],
+          paint: {
+            "line-color": "#374151",
+            "line-width": [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              8,
+              2,
+              12,
+              2.5,
+              16,
+              3.5,
+            ],
+            "line-opacity": 1,
           },
           layout: { visibility: "none" },
         });
@@ -793,6 +861,18 @@
           if (map.getLayer(lid)) map.moveLayer(lid);
         });
 
+        /**
+         * Default stack draws municipal hover under HS/MS/ES fills — the stroke is invisible. Place it above
+         * assignment boundaries (before parcels) so the hover line is actually visible.
+         */
+        if (map.getLayer("municipal-boundaries-hover") && map.getLayer("school-parcels-high")) {
+          try {
+            map.moveLayer("municipal-boundaries-hover", "school-parcels-high");
+          } catch (errMh) {
+            /* ignore */
+          }
+        }
+
         var combined = null;
         combined = mergeBbox(combined, computeBbox(es));
         combined = mergeBbox(combined, computeBbox(ms));
@@ -848,6 +928,7 @@
             }
           }
           applyScenarioFeederMapHighlights();
+          resyncToolbarLayerToggleVisibility();
         }
   }
 
@@ -928,6 +1009,13 @@
         })
         .catch(function () {
           return null;
+        }),
+      fetch(DATA.municipalBoundaries)
+        .then(function (r) {
+          return r.ok ? r.json() : { type: "FeatureCollection", features: [] };
+        })
+        .catch(function () {
+          return { type: "FeatureCollection", features: [] };
         }),
     ])
       .then(function (results) {
@@ -1152,6 +1240,15 @@
     return out;
   }
 
+  /** Re-apply toolbar layer checkbox visibility after map layers are recreated (e.g. basemap switch). */
+  function resyncToolbarLayerToggleVisibility() {
+    var panel = document.getElementById("toolbar-panel");
+    if (!panel) return;
+    panel.querySelectorAll('input[type="checkbox"][id^="toggle-"]').forEach(function (inp) {
+      inp.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+  }
+
   function appendToggleRow(container, def, onAfterChange) {
     var id = "toggle-" + def.id;
     var label = document.createElement("label");
@@ -1331,6 +1428,21 @@
       });
     }
 
+    var munEl = document.getElementById("municipal-boundary-toggles");
+    if (munEl) {
+      appendToggleRow(munEl, {
+        id: "municipal-boundaries",
+        label: "Municipal boundaries",
+        layerIds: [
+          "municipal-boundaries-fill",
+          "municipal-boundaries-outline",
+          "municipal-boundaries-hover",
+        ],
+        swatchColor: "#9ca3af",
+        defaultChecked: false,
+      });
+    }
+
     var charterEl = document.getElementById("charter-school-toggles");
     if (charterEl) {
       appendToggleRow(charterEl, {
@@ -1370,6 +1482,8 @@
     "hs-fill",
     "school-board-districts-outline",
     "school-board-districts-fill",
+    "municipal-boundaries-outline",
+    "municipal-boundaries-fill",
   ];
 
   function boundaryLayerIdToSource(layerId) {
@@ -2963,19 +3077,19 @@
     var eh = document.getElementById("main-enrollment-chart-heading");
     if (eh) {
       eh.textContent = isDistrict
-        ? "Sum of all schools: enrollment over time"
+        ? "Sum of All Traditional Schools: enrollment over time"
         : "Enrollment over time";
     }
     var eth = document.getElementById("demographics-ethnicity-heading");
     var lunchH = document.getElementById("demographics-lunch-heading");
     if (eth) {
       eth.textContent = isDistrict
-        ? "Sum of all schools: Race and Ethnicity"
+        ? "Sum of All Traditional Schools: Race and Ethnicity"
         : "Race and Ethnicity";
     }
     if (lunchH) {
       lunchH.textContent = isDistrict
-        ? "Sum of all schools: Free and Reduced Lunch"
+        ? "Sum of All Traditional Schools: Free and Reduced Lunch"
         : "Free and Reduced Lunch";
     }
   }
@@ -4253,9 +4367,62 @@
       }
     }
 
+    function clearMunicipalHoverStroke() {
+      try {
+        if (map.getLayer("municipal-boundaries-hover")) {
+          map.setFilter("municipal-boundaries-hover", [
+            "==",
+            ["to-string", ["get", "OBJECTID"]],
+            MUN_HOVER_FILTER_OFF,
+          ]);
+        }
+      } catch (errM) {
+        try {
+          if (map.getLayer("municipal-boundaries-hover")) {
+            map.setFilter("municipal-boundaries-hover", ["==", 1, 0]);
+          }
+        } catch (errM2) {
+          /* ignore */
+        }
+      }
+    }
+
+    function applyMunicipalHoverStroke(feature) {
+      if (!feature) return;
+      var props = feature.properties || {};
+      var oidRaw =
+        props.OBJECTID != null
+          ? props.OBJECTID
+          : props.objectid != null
+            ? props.objectid
+            : feature.id;
+      if (oidRaw == null) return;
+      /** Compare as strings so source + query features match regardless of number vs string. */
+      var oidKey = String(oidRaw).trim();
+      if (!oidKey) return;
+      try {
+        map.setFilter("municipal-boundaries-hover", [
+          "==",
+          ["to-string", ["get", "OBJECTID"]],
+          oidKey,
+        ]);
+      } catch (errA) {
+        try {
+          map.setFilter("municipal-boundaries-hover", [
+            "==",
+            ["get", "OBJECTID"],
+            oidRaw,
+          ]);
+        } catch (errB) {
+          /* ignore */
+        }
+      }
+    }
+
     function clearBoundaryHoverUi() {
       clearOutlineHighlight();
       clearHoverRing();
+      clearMunicipalHoverStroke();
       boundaryHoverPopup.remove();
       schoolBoardHoverPopup.remove();
       map.getCanvas().style.cursor = "";
@@ -4297,6 +4464,17 @@
         "</div>" +
         (member ? '<div class="school-board-hover-member">' + member + "</div>" : "") +
         "</div>"
+      );
+    }
+
+    function municipalBoundaryHtml(props) {
+      var rawName = props && props.CITY_NAME != null ? String(props.CITY_NAME) : "";
+      var name = escapeHtml(standardCapitalization(rawName || "Municipality"));
+      return (
+        '<div class="school-board-hover-inner">' +
+        '<div class="school-board-hover-title">' +
+        name +
+        "</div></div>"
       );
     }
 
@@ -4382,6 +4560,19 @@
         return;
       }
 
+      if (layerId === "municipal-boundaries-fill" || layerId === "municipal-boundaries-outline") {
+        clearBoundaryHoverUi();
+        clearSchoolHoverUi();
+        applyMunicipalHoverStroke(top);
+        map.getCanvas().style.cursor = "pointer";
+        schoolBoardHoverPopup
+          .setLngLat(e.lngLat)
+          .setHTML(municipalBoundaryHtml(top.properties))
+          .addTo(map);
+        refreshAssignmentBoundaryHighlight();
+        return;
+      }
+
       if (BOUNDARY_FILL_LAYERS.indexOf(layerId) === -1 && boundaryLayerIdToSource(layerId) == null) {
         clearBoundaryHoverUi();
         clearSchoolHoverUi();
@@ -4391,6 +4582,7 @@
 
       clearSchoolHoverUi();
       schoolBoardHoverPopup.remove();
+      clearMunicipalHoverStroke();
 
       var f = top;
       var props = f.properties;
