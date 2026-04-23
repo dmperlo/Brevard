@@ -6,7 +6,7 @@
     ms: "geo/MSBoundaries.json",
     hs: "geo/HSBoundaries.json",
     schools: "geo/SchoolLocations.json",
-    /** Single source for enrollment, capacity, utilization, capture, facility stats, demographics (CSV). */
+    /** Single source for enrollment, capacity, utilization, capture, charter capture, facility stats, demographics (CSV). */
     masterCsv: "data/school_master.csv",
     sankeyEsMs: "data/processed/sankey_es_ms.json",
     studentHexagons: "geo/StudentHexagons.geojson",
@@ -16,7 +16,19 @@
     charterSchoolLocations: "geo/CharterSchoolLocations.geojson",
     /** Meadowlane Primary/Intermediate grade-band capture overrides (see notes inside file). */
     meadowlaneCaptureOverride: "data/processed/meadowlane_capture_override.json",
+    /** K-12 ESE feeder matrix (columns = program destinations per school row). */
+    eseFeederMatrix: "data/processed/ese_feeder_matrix.json",
+    /** Johnson / McNair / Stone travel-distance scenario workbooks (see scripts/export_travel_impact_from_xlsx.py). */
+    travelImpact: "data/processed/travel_impact.json",
   };
+
+  var FEET_PER_MILE = 5280;
+  /** Histogram bucket width for travel-distance charts (miles). */
+  var TRAVEL_BIN_MI = 0.25;
+  /** Median line and label (flag) for travel histograms. */
+  var TRAVEL_MEDIAN_COLOR = "#dc2626";
+  /** Mean / average line and label. */
+  var TRAVEL_MEAN_COLOR = "#2563eb";
 
   /** Mapbox access token (prefer env / serverless proxy for public deployments). */
   var MAPBOX_ACCESS_TOKEN =
@@ -186,6 +198,8 @@
   var GEO_CACHE = { es: null, ms: null, hs: null, schools: null };
   /** Parsed rows from data/school_master.csv keyed by MSID string; null if missing or failed to load. */
   var MASTER_BY_MSID = null;
+  /** From data/processed/ese_feeder_matrix.json; null if missing or failed to load. */
+  var ESE_FEEDER_MATRIX = null;
   /** SCHOOLS_ID keys for `SchAB_Type === "CHOICE"` from SchoolLocations (capture KPI + CSV download). */
   var CHOICE_SCHOOL_MSIDS = null;
   /** Projected school-year column labels (matches CSV projected_* headers). */
@@ -207,10 +221,19 @@
   ];
   /** ES→MS flows from SankeyFlowHelper export; null if missing. */
   var SANKEY_CACHE = null;
+  /** Travel impact triples [attendance_msid, scenario_msid, ft] per middle workbook; see DATA.travelImpact. */
+  var TRAVEL_IMPACT_ALL = null;
+  /** Map string MSID -> true where GeoJSON(+master) TYPE is middle school (non–Jr/Sr high). */
+  var MIDDLE_SCHOOL_MSID_SET = null;
   /** Pre-aggregated student hex counts by school MSID (from one polygon per student). */
   var STUDENT_HEX_INDEX = null;
-  /** Dropdown-driven selection; map clicks do not change this. */
+  /** Dropdown- or map-driven selection; kept in sync with #school-select. */
   var selectedSchoolMsid = null;
+  /**
+   * When a map click applies #school-select, the next `applyExistingSchoolFromSelectValue` run uses
+   * this: "centerOnSchool" = pan only; "assignment" = fit assignment (dropdown default, boundary picks).
+   */
+  var pendingMapSelectFrame = null;
   /** { source, id } for assignment outline emphasis when a school is chosen from the dropdown. */
   var selectedAssignmentBoundary = null;
 
@@ -292,6 +315,13 @@
   });
 
   map.addControl(new mapboxgl.NavigationControl(), "top-left");
+  map.addControl(
+    new mapboxgl.ScaleControl({
+      maxWidth: 120,
+      unit: "imperial",
+    }),
+    "bottom-left"
+  );
   map.addControl(new mapboxgl.AttributionControl({ compact: true }), "bottom-right");
 
   function setMapboxBasemap(mode) {
@@ -1017,12 +1047,31 @@
         .catch(function () {
           return { type: "FeatureCollection", features: [] };
         }),
+      fetch(DATA.eseFeederMatrix)
+        .then(function (r) {
+          return r.ok ? r.json() : null;
+        })
+        .catch(function () {
+          return null;
+        }),
+      fetch(DATA.travelImpact)
+        .then(function (r) {
+          return r.ok ? r.json() : null;
+        })
+        .catch(function () {
+          return null;
+        }),
     ])
       .then(function (results) {
         MASTER_BY_MSID = parseSchoolMasterCsv(results[4] || "");
         SANKEY_CACHE = results[5];
         geoJsonDataCache = results;
         MEADOWLANE_CAPTURE_OVERRIDE = results[10];
+        ESE_FEEDER_MATRIX = results[12] || null;
+        TRAVEL_IMPACT_ALL = results[13] || null;
+        MIDDLE_SCHOOL_MSID_SET = buildMiddleSchoolMsidSetFromSchoolsFc(
+          enrichSchoolsFcWithMasterType(results[3])
+        );
         if (MEADOWLANE_CAPTURE_OVERRIDE && MEADOWLANE_CAPTURE_OVERRIDE.zoning_audit) {
           var za =
             MEADOWLANE_CAPTURE_OVERRIDE.zoning_audit
@@ -1035,6 +1084,12 @@
           }
         }
         applyGeoJsonLayersFromFetchResults(results, { fitBounds: true });
+        var selAfter = document.getElementById("school-select");
+        if (selAfter && selAfter.value) {
+          renderEseFeederFlowsTable(Number(selAfter.value));
+        } else {
+          renderEseFeederFlowsTable(null);
+        }
       })
       .catch(function (err) {
         console.error(err);
@@ -1093,10 +1148,12 @@
       return String(h).trim();
     });
     var capIdx = -1;
+    var charterIdx = -1;
     for (var h = 0; h < headers.length; h++) {
       if (headers[h] === "capture_rate") {
         capIdx = h;
-        break;
+      } else if (headers[h] === "charter_capture_rate") {
+        charterIdx = h;
       }
     }
     if (capIdx < 0) return grid;
@@ -1110,6 +1167,9 @@
       if (isNaN(idNum)) continue;
       if (CHOICE_SCHOOL_MSIDS[String(idNum)] || CHOICE_SCHOOL_MSIDS[idRaw]) {
         row[capIdx] = na;
+        if (charterIdx >= 0) {
+          row[charterIdx] = na;
+        }
       }
     }
     return grid;
@@ -1127,6 +1187,17 @@
       if (!isNaN(n)) o[String(n)] = true;
     }
     return o;
+  }
+
+  function isMsidInSchoolSelectDropdown(msid) {
+    if (msid == null || isNaN(msid)) return false;
+    var a = getSchoolDropdownMsidSet();
+    return !!(a[String(msid)] || a[String(Number(msid))]);
+  }
+
+  function isExistingConditionsViewActive() {
+    var p = document.getElementById("page-existing");
+    return !!(p && !p.hidden);
   }
 
   /**
@@ -1234,7 +1305,7 @@
       out.features.push({
         type: "Feature",
         geometry: geom,
-        properties: { _parcelLevel: lvl },
+        properties: { SCHOOLS_ID: msid, _parcelLevel: lvl },
       });
     }
     return out;
@@ -1462,6 +1533,30 @@
     "schools-high",
     "schools-charter",
   ];
+  /**
+   * Map pick priority (top to bottom in stack) for each category.
+   * Used with queryRenderedFeatures: first hit is the topmost visible in that set.
+   */
+  var SCHOOL_LAYERS_CLICK_TOP_FIRST = [
+    "schools-charter",
+    "schools-elementary",
+    "schools-middle",
+    "schools-high",
+  ];
+  var SCHOOL_PARCEL_LAYERS_CLICK_TOP_FIRST = [
+    "school-parcels-elementary",
+    "school-parcels-jr-sr",
+    "school-parcels-middle",
+    "school-parcels-high",
+  ];
+  var ASSIGNMENT_BOUNDARY_LAYERS_CLICK_TOP_FIRST = [
+    "es-outline",
+    "ms-outline",
+    "hs-outline",
+    "es-fill",
+    "ms-fill",
+    "hs-fill",
+  ];
 
   /** Topmost paint order first: used so queryRenderedFeatures returns the visually top feature first. */
   var MAP_OVERLAY_HIT_LAYER_ORDER_TOP_FIRST = [
@@ -1607,6 +1702,85 @@
     );
   }
 
+  /**
+   * Short labels for ESE feeder table only: ES / MS / HS / Jr/Sr HS from school_master school_level + name.
+   */
+  function eseTableAbbreviatedSchoolName(m) {
+    if (!m || !m.school_name) return "";
+    var full = formatSchoolDisplayName(
+      standardCapitalization(expandElemSchoolName(m.school_name))
+    );
+    var lv = String(m.school_level || "").toLowerCase().trim();
+    if (!lv) return full;
+
+    var base = full;
+
+    if (lv === "elementary") {
+      base = full
+        .replace(/\s+Elementary\s+Magnet\s+School$/i, "")
+        .replace(/\s+Elementary\s+School$/i, "")
+        .trim();
+      return base ? base + " ES" : full;
+    }
+    if (lv === "middle") {
+      base = full.replace(/\s+Magnet\s+Middle\s+School$/i, "").trim();
+      base = base.replace(/\s+Middle\s+School$/i, "").trim();
+      return base ? base + " MS" : full;
+    }
+    if (lv === "high") {
+      base = full.replace(/\s+Magnet\s+Senior\s+High\s+School$/i, "").trim();
+      base = base.replace(/\s+Senior\s+High\s+School$/i, "").trim();
+      base = base.replace(/\s+High\s+School$/i, "").trim();
+      return base ? base + " HS" : full;
+    }
+    if (lv === "jr_sr_high") {
+      base = full.replace(/\s+Jr\s*\/\s*Sr\s+High\s+School$/i, "").trim();
+      base = base.replace(/\s+Jr\.?\s*\/?\s*Sr\.?\s+High\s+School$/i, "").trim();
+      base = base.replace(/\s+Magnet\s+Senior\s+High\s+School$/i, "").trim();
+      base = base.replace(/\s+Senior\s+High\s+School$/i, "").trim();
+      base = base.replace(/\s+High\s+School$/i, "").trim();
+      return base ? base + " Jr/Sr HS" : full;
+    }
+
+    return full;
+  }
+
+  /** Display name from district MSID only (for feeder tables when GeoJSON props are unavailable). */
+  function eseSchoolNameFromMsid(msidRaw) {
+    var n = Number(msidRaw);
+    if (isNaN(n)) return String(msidRaw);
+    var m = masterRow(n);
+    if (!m || !m.school_name) {
+      return "MSID " + String(n);
+    }
+    return eseTableAbbreviatedSchoolName(m);
+  }
+
+  /**
+   * Convert feeder MSID lists to sorted display names; drops the selected school's MSID (no self-loops).
+   */
+  function eseFilteredSortedSchoolNames(msidStrings, excludeMsid) {
+    var ex = Number(excludeMsid);
+    var seen = {};
+    var pairs = [];
+    for (var i = 0; i < (msidStrings || []).length; i++) {
+      var raw = msidStrings[i];
+      var n = Number(raw);
+      if (isNaN(n)) continue;
+      if (n === ex) continue;
+      var idStr = String(n);
+      if (seen[idStr]) continue;
+      seen[idStr] = true;
+      pairs.push({ id: idStr, name: eseSchoolNameFromMsid(raw) });
+    }
+    pairs.sort(function (a, b) {
+      return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+    });
+    return pairs.map(function (p) {
+      return p.name;
+    });
+  }
+
   function schoolDetailHtml(p) {
     var name = schoolDisplayNameFromProps(p);
     var sid = p.SCHOOLS_ID != null ? Number(p.SCHOOLS_ID) : NaN;
@@ -1645,6 +1819,19 @@
 
   /** Shown first in the school dropdown; order is Johnson, McNair, Stone. MSIDs match SCHOOLS_ID in GeoJSON. */
   var PRIORITY_SCHOOL_MSIDS = [3031, 1081, 2071];
+
+  /** Compact names for scenario travel-distance chart titles. */
+  var SCENARIO_MIDDLE_SHORT_NAME = {
+    3031: "Johnson MS",
+    1081: "McNair MS",
+    2071: "Stone MS",
+  };
+
+  function scenarioMiddleShortDisplayName(msid) {
+    if (msid == null || isNaN(msid)) return null;
+    var sh = SCENARIO_MIDDLE_SHORT_NAME[msid];
+    return sh != null ? sh : null;
+  }
 
   function schoolNameForSelect(p) {
     return schoolDisplayNameFromProps(p);
@@ -1805,6 +1992,53 @@
     applySelectedAssignmentBoundary(selectedSchoolMsid);
   }
 
+  function schoolPointLonLatForMsid(msid, schoolByMsid) {
+    var p = schoolByMsid[msid];
+    var lon;
+    var lat;
+    if (p && p.Longitude != null && p.Latitude != null) {
+      lon = Number(p.Longitude);
+      lat = Number(p.Latitude);
+    } else if (GEO_CACHE.schools && GEO_CACHE.schools.features) {
+      for (var i = 0; i < GEO_CACHE.schools.features.length; i++) {
+        var ft = GEO_CACHE.schools.features[i];
+        if (
+          ft.properties &&
+          Number(ft.properties.SCHOOLS_ID) === msid &&
+          ft.geometry &&
+          ft.geometry.coordinates
+        ) {
+          lon = ft.geometry.coordinates[0];
+          lat = ft.geometry.coordinates[1];
+          break;
+        }
+      }
+    }
+    if (lon == null || lat == null || isNaN(lon) || isNaN(lat)) {
+      return null;
+    }
+    return [lon, lat];
+  }
+
+  /** Pans the map so the school location is centered; zoom level is unchanged. */
+  function centerMapOnSchoolPoint(msid, schoolByMsid) {
+    if (!map) return;
+    var c = schoolPointLonLatForMsid(msid, schoolByMsid);
+    if (!c) {
+      zoomToSchoolAssignment(msid, schoolByMsid);
+      return;
+    }
+    try {
+      map.easeTo({
+        center: c,
+        duration: 750,
+        essential: true,
+      });
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
   function zoomToSchoolAssignment(msid, schoolByMsid) {
     var boundaryFt = findBoundaryFeatureForMsid(msid);
     var bbox;
@@ -1814,28 +2048,10 @@
         features: [boundaryFt],
       });
     } else {
-      var p = schoolByMsid[msid];
-      var lon;
-      var lat;
-      if (p && p.Longitude != null && p.Latitude != null) {
-        lon = Number(p.Longitude);
-        lat = Number(p.Latitude);
-      } else if (GEO_CACHE.schools && GEO_CACHE.schools.features) {
-        for (var i = 0; i < GEO_CACHE.schools.features.length; i++) {
-          var ft = GEO_CACHE.schools.features[i];
-          if (
-            ft.properties &&
-            Number(ft.properties.SCHOOLS_ID) === msid &&
-            ft.geometry &&
-            ft.geometry.coordinates
-          ) {
-            lon = ft.geometry.coordinates[0];
-            lat = ft.geometry.coordinates[1];
-            break;
-          }
-        }
-      }
-      if (lon == null || lat == null || isNaN(lon) || isNaN(lat)) return;
+      var c2 = schoolPointLonLatForMsid(msid, schoolByMsid);
+      if (!c2) return;
+      var lon = c2[0];
+      var lat = c2[1];
       var d = 0.03;
       bbox = [lon - d, lat - d, lon + d, lat + d];
     }
@@ -3591,6 +3807,524 @@
     return null;
   }
 
+  function buildMiddleSchoolMsidSetFromSchoolsFc(schoolsFc) {
+    var o = {};
+    if (!schoolsFc || !schoolsFc.features) return o;
+    for (var i = 0; i < schoolsFc.features.length; i++) {
+      var p = schoolsFc.features[i].properties;
+      if (!p || p.SCHOOLS_ID == null || p.SCHOOLS_ID === "") continue;
+      var t = (p.TYPE || "").toUpperCase();
+      if (t.indexOf("MIDDLE") >= 0 && t.indexOf("HIGH") < 0) {
+        o[String(Number(p.SCHOOLS_ID))] = true;
+      }
+    }
+    return o;
+  }
+
+  /**
+   * Middle-school attendance rows only count when attendance matches the scenario middle.
+   * Elementary attendance respects feeder checkboxes unless ignoreFeederCheckboxes (axis extent only).
+   */
+  function attendancePassesScenarioTravelFilter(
+    attMsid,
+    selectedMiddleMsid,
+    feederRows,
+    ignoreFeederCheckboxes
+  ) {
+    var ms = Number(attMsid);
+    if (isNaN(ms)) return false;
+    var msStr = String(ms);
+    var midSet = MIDDLE_SCHOOL_MSID_SET || {};
+    if (midSet[msStr]) {
+      return ms === selectedMiddleMsid;
+    }
+    for (var i = 0; i < feederRows.length; i++) {
+      var r = feederRows[i];
+      if (r.msid != null && !isNaN(r.msid) && r.msid === ms) {
+        if (!r.hasEnrollment) return false;
+        if (ignoreFeederCheckboxes) return true;
+        return scenarioFeederChecked[r.msid] !== false;
+      }
+    }
+    return true;
+  }
+
+  /** @returns {number|null} miles, or null if invalid / omit */
+  function travelMilesFromFeet(ft) {
+    var n = Number(ft);
+    if (!isFinite(n) || n <= 0) return null;
+    return n / FEET_PER_MILE;
+  }
+
+  function medianOfNumbers(vals) {
+    if (!vals || !vals.length) return null;
+    var s = vals.slice().sort(function (a, b) {
+      return a - b;
+    });
+    var n = s.length;
+    var h = Math.floor(n / 2);
+    if (n % 2 === 1) return s[h];
+    return (s[h - 1] + s[h]) / 2;
+  }
+
+  function meanOfNumbers(vals) {
+    if (!vals || !vals.length) return null;
+    var s = 0;
+    var i;
+    for (i = 0; i < vals.length; i++) s += vals[i];
+    return s / vals.length;
+  }
+
+  /** Tukey upper inner fence (Q3 + 3×IQR); null when not applicable. */
+  function travelTukeyUpperFenceMiles(miles) {
+    if (!miles || miles.length < 4) return null;
+    var sorted = miles.slice().sort(function (a, b) {
+      return a - b;
+    });
+    var n = sorted.length;
+    var q1 = sorted[Math.floor((n - 1) * 0.25)];
+    var q3 = sorted[Math.ceil((n - 1) * 0.75)];
+    var iqr = q3 - q1;
+    if (!(iqr > 0) || !isFinite(iqr)) return null;
+    return q3 + 3 * iqr;
+  }
+
+  /** Drops values above the Tukey upper fence; keeps all when fence undefined. */
+  function travelMilesExcludingUpperOutliers(miles) {
+    if (!miles || !miles.length) return [];
+    var fence = travelTukeyUpperFenceMiles(miles);
+    if (fence == null || !isFinite(fence)) return miles.slice();
+    return miles.filter(function (m) {
+      return m <= fence + 1e-9;
+    });
+  }
+
+  /** X-axis max (mi) from retained distances only; bucket-aligned. Outliers should already be removed. */
+  function travelHistogramAxisExtentFromMiles(miles) {
+    var bw = TRAVEL_BIN_MI;
+    if (!miles || !miles.length) return bw;
+    var maxV = Math.max.apply(null, miles);
+    return Math.max(bw, Math.ceil(maxV / bw) * bw);
+  }
+
+  /** Shared x-axis for existing + scenario pair after each side drops outliers. */
+  function travelHistogramPairedAxisHiMiles(milesA, milesB) {
+    var bw = TRAVEL_BIN_MI;
+    var ha =
+      milesA && milesA.length ? travelHistogramAxisExtentFromMiles(milesA) : 0;
+    var hb =
+      milesB && milesB.length ? travelHistogramAxisExtentFromMiles(milesB) : 0;
+    if (ha <= 0 && hb <= 0) return bw;
+    return Math.max(bw, ha, hb);
+  }
+
+  function binTravelHistogramCounts(miles, axisHi) {
+    var bw = TRAVEL_BIN_MI;
+    var numBins = Math.max(1, Math.round(axisHi / bw));
+    var counts = [];
+    var b;
+    for (b = 0; b < numBins; b++) counts[b] = 0;
+    for (var j = 0; j < miles.length; j++) {
+      var m = miles[j];
+      var idx;
+      if (m >= axisHi - 1e-12) idx = numBins - 1;
+      else {
+        idx = Math.floor(m / bw);
+        if (idx < 0) idx = 0;
+        if (idx >= numBins) idx = numBins - 1;
+      }
+      counts[idx]++;
+    }
+    return { counts: counts, numBins: numBins, axisHi: axisHi };
+  }
+
+  /**
+   * @param {'existing'|'scenario'} mode
+   * @param {boolean} [ignoreFeederCheckboxes] If true, axis-style extent: include all feeder schools regardless of checkbox.
+   * @returns {number[]} distances in miles
+   */
+  function collectScenarioTravelMiles(
+    mode,
+    triples,
+    selectedMiddleMsid,
+    feederRows,
+    ignoreFeederCheckboxes
+  ) {
+    var out = [];
+    if (!triples || !triples.length) return out;
+    var sel = selectedMiddleMsid;
+    var ignFeed =
+      ignoreFeederCheckboxes === true;
+    for (var i = 0; i < triples.length; i++) {
+      var row = triples[i];
+      if (!row || row.length < 3) continue;
+      var att = Number(row[0]);
+      var sce = Number(row[1]);
+      var mi = travelMilesFromFeet(row[2]);
+      if (mi == null) continue;
+      if (
+        !attendancePassesScenarioTravelFilter(att, sel, feederRows, ignFeed)
+      )
+        continue;
+      if (mode === "existing") {
+        if (att !== sce) continue;
+      } else {
+        if (sce !== sel) continue;
+      }
+      out.push(mi);
+    }
+    return out;
+  }
+
+  function renderTravelHistogramIntoRoot(root, chartTitle, miles, options) {
+    options = options || {};
+    if (!root) return;
+    var bw = TRAVEL_BIN_MI;
+    if (!miles || !miles.length) {
+      root.innerHTML =
+        '<p class="travel-hist-empty">No students match the current filters.</p>';
+      root.setAttribute(
+        "aria-label",
+        chartTitle + ": no data for the current filters."
+      );
+      return;
+    }
+    var milesUse = travelMilesExcludingUpperOutliers(miles);
+    if (!milesUse.length) {
+      root.innerHTML =
+        '<p class="travel-hist-empty">All distances were excluded as statistical outliers (Tukey upper fence).</p>';
+      root.setAttribute(
+        "aria-label",
+        chartTitle + ": all values excluded as outliers."
+      );
+      return;
+    }
+    var axisHi =
+      options.axisHiOverride != null &&
+      isFinite(options.axisHiOverride) &&
+      options.axisHiOverride > 0
+        ? options.axisHiOverride
+        : travelHistogramAxisExtentFromMiles(milesUse);
+    if (!(axisHi > 0) || !isFinite(axisHi)) axisHi = bw;
+    var binRes = binTravelHistogramCounts(milesUse, axisHi);
+    var counts = binRes.counts;
+    var numBins = binRes.numBins;
+    var maxCount = 0;
+    var c;
+    for (c = 0; c < counts.length; c++) {
+      if (counts[c] > maxCount) maxCount = counts[c];
+    }
+    if (maxCount <= 0) maxCount = 1;
+
+    var ml = 44;
+    var mr = 118;
+    var medTextY = 6;
+    var meanTextY = 24;
+    var mt = 40;
+    var mb = 46;
+    var cw = root.clientWidth || 0;
+    if (cw < 80 && root.closest) {
+      var chartCard = root.closest(".travel-impact-chart-card");
+      if (chartCard) {
+        cw = Math.max(0, chartCard.getBoundingClientRect().width - 24);
+      }
+    }
+    if (cw < 80) {
+      cw =
+        typeof window !== "undefined"
+          ? Math.min(920, Math.max(320, window.innerWidth - 120))
+          : 520;
+    }
+    var iw = Math.max(220, cw - ml - mr);
+    var ih = 156;
+    var med = medianOfNumbers(milesUse);
+    var avg = meanOfNumbers(milesUse);
+    var medLabel =
+      med != null && isFinite(med) ? "Median " + med.toFixed(2) + " mi" : "";
+    var meanLabel =
+      avg != null && isFinite(avg)
+        ? "Average " + avg.toFixed(2) + " mi"
+        : "";
+
+    var parts = [];
+    parts.push(
+      '<svg xmlns="http://www.w3.org/2000/svg" class="travel-hist-svg" viewBox="0 0 ' +
+        (ml + iw + mr) +
+        " " +
+        (mt + ih + mb) +
+        '" aria-hidden="true">'
+    );
+
+    var baselineY = mt + ih;
+    parts.push(
+      '<line x1="' +
+        ml +
+        '" y1="' +
+        baselineY +
+        '" x2="' +
+        (ml + iw) +
+        '" y2="' +
+        baselineY +
+        '" stroke="#e5e7eb" stroke-width="1" />'
+    );
+
+    function xPix(miCoord) {
+      return ml + (miCoord / axisHi) * iw;
+    }
+
+    var barGap = 1;
+    for (var b = 0; b < numBins; b++) {
+      var x0 = ((b * bw) / axisHi) * iw;
+      var barW = Math.max(0.5, (bw / axisHi) * iw - barGap);
+      var h = maxCount > 0 ? (counts[b] / maxCount) * ih : 0;
+      var bx = ml + x0 + barGap / 2;
+      var by = baselineY - h;
+      var tip =
+        counts[b] > 0
+          ? "<title>" +
+            escapeXmlText(
+              (b * bw).toFixed(2) +
+                "–" +
+                Math.min(axisHi, (b + 1) * bw).toFixed(2) +
+                " mi: " +
+                counts[b].toLocaleString()
+            ) +
+            "</title>"
+          : "";
+      parts.push(
+        '<rect class="travel-hist-bar" x="' +
+          bx.toFixed(2) +
+          '" y="' +
+          by.toFixed(2) +
+          '" width="' +
+          barW.toFixed(2) +
+          '" height="' +
+          h.toFixed(2) +
+          '" fill="#64748b" rx="1">' +
+          tip +
+          "</rect>"
+      );
+    }
+
+    if (med != null && isFinite(med)) {
+      var mx = xPix(Math.min(med, axisHi));
+      parts.push(
+        '<line class="travel-hist-median" x1="' +
+          mx.toFixed(2) +
+          '" y1="' +
+          mt +
+          '" x2="' +
+          mx.toFixed(2) +
+          '" y2="' +
+          baselineY +
+          '" stroke="' +
+          TRAVEL_MEDIAN_COLOR +
+          '" stroke-width="2" stroke-dasharray="4 3" />'
+      );
+      if (medLabel) {
+        var flagX = mx + 6;
+        parts.push(
+          '<text class="travel-hist-median-flag" x="' +
+            flagX.toFixed(2) +
+            '" y="' +
+            medTextY +
+            '" font-size="13" font-weight="600" fill="' +
+            TRAVEL_MEDIAN_COLOR +
+            '" font-family="Libre Franklin, sans-serif" text-anchor="start" dominant-baseline="hanging" pointer-events="none">' +
+            escapeXmlText(medLabel) +
+            "</text>"
+        );
+      }
+    }
+
+    if (avg != null && isFinite(avg)) {
+      var ax = xPix(Math.min(avg, axisHi));
+      parts.push(
+        '<line class="travel-hist-mean" x1="' +
+          ax.toFixed(2) +
+          '" y1="' +
+          mt +
+          '" x2="' +
+          ax.toFixed(2) +
+          '" y2="' +
+          baselineY +
+          '" stroke="' +
+          TRAVEL_MEAN_COLOR +
+          '" stroke-width="2" stroke-dasharray="6 4" />'
+      );
+      if (meanLabel) {
+        var meanFlagX = ax + 6;
+        parts.push(
+          '<text class="travel-hist-mean-flag" x="' +
+            meanFlagX.toFixed(2) +
+            '" y="' +
+            meanTextY +
+            '" font-size="13" font-weight="600" fill="' +
+            TRAVEL_MEAN_COLOR +
+            '" font-family="Libre Franklin, sans-serif" text-anchor="start" dominant-baseline="hanging" pointer-events="none">' +
+            escapeXmlText(meanLabel) +
+            "</text>"
+        );
+      }
+    }
+
+    var maxIntTick = Math.ceil(axisHi - 1e-9);
+    var ki;
+    for (ki = 0; ki <= maxIntTick; ki++) {
+      if (ki > axisHi + 1e-9) break;
+      var tx = xPix(Math.min(ki, axisHi));
+      parts.push(
+        '<line x1="' +
+          tx.toFixed(2) +
+          '" y1="' +
+          baselineY +
+          '" x2="' +
+          tx.toFixed(2) +
+          '" y2="' +
+          (baselineY + 5) +
+          '" stroke="#d1d5db" stroke-width="1" />'
+      );
+      parts.push(
+        '<text x="' +
+          tx.toFixed(2) +
+          '" y="' +
+          (baselineY + 18) +
+          '" text-anchor="middle" font-size="10" fill="#4b5563" font-family="Libre Franklin, sans-serif">' +
+          escapeXmlText(String(ki)) +
+          "</text>"
+      );
+    }
+
+    parts.push(
+      '<text x="' +
+        (ml + iw / 2) +
+        '" y="' +
+        (baselineY + mb - 4) +
+        '" text-anchor="middle" font-size="10" fill="#6b7280" font-family="Libre Franklin, sans-serif">Network Travel Distance (Miles)</text>'
+    );
+
+    parts.push("</svg>");
+    root.innerHTML = parts.join("");
+    root.setAttribute(
+      "aria-label",
+      chartTitle + ": histogram by " + bw + " mi buckets."
+    );
+  }
+
+  function renderScenarioTravelImpactCharts() {
+    var elEx = document.getElementById("scenario-travel-existing");
+    var elSc = document.getElementById("scenario-travel-scenario");
+    if (!elEx || !elSc) return;
+
+    if (
+      scenarioMiddleMsid == null ||
+      isNaN(scenarioMiddleMsid) ||
+      PRIORITY_SCHOOL_MSIDS.indexOf(scenarioMiddleMsid) < 0
+    ) {
+      elEx.innerHTML =
+        '<p class="travel-hist-empty">Select a middle school to view travel distances.</p>';
+      elSc.innerHTML =
+        '<p class="travel-hist-empty">Select a middle school to view travel distances.</p>';
+      return;
+    }
+
+    var pack =
+      TRAVEL_IMPACT_ALL &&
+      TRAVEL_IMPACT_ALL.byMsid &&
+      TRAVEL_IMPACT_ALL.byMsid[String(scenarioMiddleMsid)];
+    if (!pack || !pack.rows || !pack.rows.length) {
+      var miss =
+        '<p class="travel-hist-empty">Travel distance data is not loaded. Run scripts/export_travel_impact_from_xlsx.py and refresh.</p>';
+      elEx.innerHTML = miss;
+      elSc.innerHTML = miss;
+      return;
+    }
+
+    var feederRows = scenarioLastFeederRows || [];
+    var milesEx = collectScenarioTravelMiles(
+      "existing",
+      pack.rows,
+      scenarioMiddleMsid,
+      feederRows,
+      false
+    );
+    var milesSc = collectScenarioTravelMiles(
+      "scenario",
+      pack.rows,
+      scenarioMiddleMsid,
+      feederRows,
+      false
+    );
+
+    var milesExAxis = collectScenarioTravelMiles(
+      "existing",
+      pack.rows,
+      scenarioMiddleMsid,
+      feederRows,
+      true
+    );
+    var milesScAxis = collectScenarioTravelMiles(
+      "scenario",
+      pack.rows,
+      scenarioMiddleMsid,
+      feederRows,
+      true
+    );
+
+    var scenTitleEl = document.getElementById(
+      "scenario-travel-scenario-chart-title"
+    );
+    var shortMid = scenarioMiddleShortDisplayName(scenarioMiddleMsid);
+    if (scenTitleEl) {
+      if (shortMid) {
+        scenTitleEl.textContent =
+          "Scenario Travel Distances to " + shortMid;
+      } else {
+        scenTitleEl.textContent =
+          "Scenario Travel Distances to Selected Middle School";
+      }
+    }
+
+    var scenarioChartTitle =
+      scenTitleEl && scenTitleEl.textContent
+        ? scenTitleEl.textContent
+        : "Scenario Travel Distances to Selected Middle School";
+
+    var useExAxis = travelMilesExcludingUpperOutliers(milesExAxis);
+    var useScAxis = travelMilesExcludingUpperOutliers(milesScAxis);
+    var pairedAxisHi = travelHistogramPairedAxisHiMiles(useExAxis, useScAxis);
+    var histOpts = { axisHiOverride: pairedAxisHi };
+
+    function paintTravelHistograms() {
+      renderTravelHistogramIntoRoot(
+        elEx,
+        "Existing Travel Distances to Attendance School",
+        milesEx,
+        histOpts
+      );
+      renderTravelHistogramIntoRoot(
+        elSc,
+        scenarioChartTitle,
+        milesSc,
+        histOpts
+      );
+    }
+
+    paintTravelHistograms();
+    if (typeof requestAnimationFrame !== "undefined") {
+      requestAnimationFrame(function travelHistLayoutReflow() {
+        if (
+          scenarioMiddleMsid == null ||
+          isNaN(scenarioMiddleMsid) ||
+          PRIORITY_SCHOOL_MSIDS.indexOf(scenarioMiddleMsid) < 0
+        ) {
+          return;
+        }
+        paintTravelHistograms();
+      });
+    }
+  }
+
   function collectScenarioWeightedSpec() {
     var out = [];
     if (scenarioMiddleMsid != null && !isNaN(scenarioMiddleMsid)) {
@@ -3659,12 +4393,23 @@
         lunchEl.innerHTML =
           '<p class="demographics-pie-empty">Select a middle school to view merged demographics.</p>';
       }
+      var trEx = document.getElementById("scenario-travel-existing");
+      var trSc = document.getElementById("scenario-travel-scenario");
+      if (trEx) {
+        trEx.innerHTML =
+          '<p class="travel-hist-empty">Select a middle school to view travel distances.</p>';
+      }
+      if (trSc) {
+        trSc.innerHTML =
+          '<p class="travel-hist-empty">Select a middle school to view travel distances.</p>';
+      }
       applyScenarioFeederMapHighlights();
       syncStudentHexLayer();
       return;
     }
     var agg = aggregateDemographicsMsidsWeighted(weighted);
     renderDemographicsFromAggregates(agg, ethEl, lunchEl);
+    renderScenarioTravelImpactCharts();
     applyScenarioFeederMapHighlights();
     syncStudentHexLayer();
   }
@@ -3691,7 +4436,9 @@
         " | Utilization: " +
         kpi.utilizationStr +
         " | Attendance Boundary Capture Rate: " +
-        kpi.captureStr;
+        kpi.captureStr +
+        " | Attendance Boundary Charter Capture Rate: " +
+        kpi.charterStr;
       elKpi.classList.remove("school-details-placeholder");
       elKpi.title =
         "Key metrics from data/school_master.csv for the selected middle school.";
@@ -3857,7 +4604,7 @@
     var p3 = document.getElementById("scenario-details-kpi");
     if (p3) {
       p3.textContent =
-        "'25-26 Enrollment: — | Factored Capacity: — | Utilization: — | Attendance Boundary Capture Rate: —";
+        "'25-26 Enrollment: — | Factored Capacity: — | Utilization: — | Attendance Boundary Capture Rate: — | Attendance Boundary Charter Capture Rate: —";
       p3.classList.add("school-details-placeholder");
       p3.removeAttribute("title");
     }
@@ -3885,6 +4632,23 @@
     if (lunchEl) {
       lunchEl.innerHTML =
         '<p class="demographics-pie-empty">Select a middle school to view merged demographics.</p>';
+    }
+    var trExReset = document.getElementById("scenario-travel-existing");
+    var trScReset = document.getElementById("scenario-travel-scenario");
+    if (trExReset) {
+      trExReset.innerHTML =
+        '<p class="travel-hist-empty">Select a middle school to view travel distances.</p>';
+    }
+    if (trScReset) {
+      trScReset.innerHTML =
+        '<p class="travel-hist-empty">Select a middle school to view travel distances.</p>';
+    }
+    var scTrTitle = document.getElementById(
+      "scenario-travel-scenario-chart-title"
+    );
+    if (scTrTitle) {
+      scTrTitle.textContent =
+        "Scenario Travel Distances to Selected Middle School";
     }
     applyScenarioFeederMapHighlights();
     syncStudentHexLayer();
@@ -4053,7 +4817,7 @@
 
   /**
    * Shared display strings for KPI cards and scenario summary line (same rules).
-   * @returns {{ enrollmentStr: string, capacityStr: string, utilizationStr: string, captureStr: string, captureIsChoice: boolean, captureTitle: string|null }}
+   * @returns {{ enrollmentStr: string, capacityStr: string, utilizationStr: string, captureStr: string, charterStr: string, captureIsChoice: boolean, captureTitle: string|null, charterTitle: string|null }}
    */
   function getSchoolKpiDisplayParts(p, m, msid) {
     var enrollmentStr = "—";
@@ -4157,14 +4921,100 @@
       }
     }
 
+    var charterStr = "—";
+    var charterTitle = null;
+    if (schoolIsChoiceFromProps(p)) {
+      charterStr = "N/A (Choice School)";
+      charterTitle =
+        "Choice schools are not zoned; attendance boundary charter capture does not apply.";
+    } else if (
+      m &&
+      m.charter_capture_rate !== "" &&
+      m.charter_capture_rate != null
+    ) {
+      var chDec = Number(m.charter_capture_rate);
+      if (!isNaN(chDec)) {
+        var chPct = chDec * 100;
+        charterStr =
+          (chPct % 1 === 0 ? String(chPct) : chPct.toFixed(1)) + "%";
+        charterTitle =
+          "Percentage of resident public school students attending charter schools, from data/school_master.csv (decimal fraction, shown as percent).";
+      }
+    }
+
     return {
       enrollmentStr: enrollmentStr,
       capacityStr: capacityStr,
       utilizationStr: utilizationStr,
       captureStr: captureStr,
+      charterStr: charterStr,
       captureIsChoice: captureIsChoice,
       captureTitle: captureTitle,
+      charterTitle: charterTitle,
     };
+  }
+
+  /**
+   * Fills #ese-feeder-tbody from ESE_FEEDER_MATRIX for the selected school MSID.
+   * Row labels use short titles; title attribute carries full Excel column header text.
+   */
+  function renderEseFeederFlowsTable(msid) {
+    var tbody = document.getElementById("ese-feeder-tbody");
+    if (!tbody) return;
+
+    function rowPlaceholder(msg) {
+      tbody.innerHTML = "";
+      var tr = document.createElement("tr");
+      var td = document.createElement("td");
+      td.colSpan = 3;
+      td.className = "ese-feeder-placeholder";
+      td.textContent = msg;
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+    }
+
+    if (!ESE_FEEDER_MATRIX || !ESE_FEEDER_MATRIX.programs || !ESE_FEEDER_MATRIX.programs.length) {
+      rowPlaceholder(
+        "ESE feeder matrix could not be loaded (data/processed/ese_feeder_matrix.json)."
+      );
+      return;
+    }
+
+    if (msid == null || isNaN(Number(msid))) {
+      rowPlaceholder("Select a school to view ESE feeder flows.");
+      return;
+    }
+
+    var sidStr = String(Number(msid));
+    var rowMap = ESE_FEEDER_MATRIX.rows ? ESE_FEEDER_MATRIX.rows[sidStr] : null;
+    var accAll =
+      ESE_FEEDER_MATRIX.acceptsFrom && ESE_FEEDER_MATRIX.acceptsFrom[sidStr]
+        ? ESE_FEEDER_MATRIX.acceptsFrom[sidStr]
+        : {};
+
+    tbody.innerHTML = "";
+    ESE_FEEDER_MATRIX.programs.forEach(function (prog) {
+      var tr = document.createElement("tr");
+      var tdLabel = document.createElement("th");
+      tdLabel.scope = "row";
+      tdLabel.className = "ese-feeder-program-label";
+      tdLabel.textContent = prog.shortLabel || prog.key;
+      if (prog.headerFull) {
+        tdLabel.title = String(prog.headerFull).replace(/\s*\n\s*/g, " ").trim();
+      }
+      var tdAccept = document.createElement("td");
+      var tdSend = document.createElement("td");
+      var acc = accAll[prog.key] || [];
+      var sends = rowMap && rowMap[prog.key] ? rowMap[prog.key] : [];
+      var acceptNames = eseFilteredSortedSchoolNames(acc, msid);
+      var sendNames = eseFilteredSortedSchoolNames(sends, msid);
+      tdAccept.textContent = acceptNames.length ? acceptNames.join(", ") : "—";
+      tdSend.textContent = sendNames.length ? sendNames.join(", ") : "—";
+      tr.appendChild(tdLabel);
+      tr.appendChild(tdAccept);
+      tr.appendChild(tdSend);
+      tbody.appendChild(tr);
+    });
   }
 
   function updateLeftPanelFromSchool(p) {
@@ -4222,6 +5072,7 @@
     renderEnrollmentChart(msid);
     renderDemographicsCharts(msid);
     renderSankeyPanel(schoolPropsWithMasterType(p));
+    renderEseFeederFlowsTable(msid);
     var captureEl = document.getElementById("kpi-capture");
     if (captureEl) {
       captureEl.classList.remove("kpi-value--choice-na");
@@ -4244,6 +5095,29 @@
         }
       }
     }
+
+    var charterEl = document.getElementById("kpi-charter-capture");
+    if (charterEl) {
+      charterEl.classList.remove("kpi-value--choice-na");
+      if (parts.captureIsChoice) {
+        charterEl.textContent = parts.charterStr;
+        charterEl.classList.remove("kpi-value--placeholder");
+        charterEl.classList.add("kpi-value--choice-na");
+        charterEl.title = parts.charterTitle || "";
+      } else if (parts.charterStr !== "—") {
+        charterEl.textContent = parts.charterStr;
+        charterEl.classList.remove("kpi-value--placeholder");
+        charterEl.title = parts.charterTitle || "";
+      } else {
+        charterEl.textContent = "—";
+        charterEl.classList.add("kpi-value--placeholder");
+        if (parts.charterTitle) {
+          charterEl.title = parts.charterTitle;
+        } else {
+          charterEl.removeAttribute("title");
+        }
+      }
+    }
   }
 
   function resetLeftPanelPlaceholders() {
@@ -4258,51 +5132,76 @@
         "Opened: 19XX | Age of Site: XX | Year of Last Major Renovation: — | Size of Site (Acres): XX";
       elS.classList.add("school-details-placeholder");
     }
-    ["kpi-enrollment", "kpi-capacity", "kpi-utilization", "kpi-capture"].forEach(
-      function (id) {
-        var k = document.getElementById(id);
-        if (k) {
-          k.textContent = "—";
-          k.classList.add("kpi-value--placeholder");
-          k.classList.remove("kpi-value--choice-na");
-          if (
-            id === "kpi-enrollment" ||
-            id === "kpi-capacity" ||
-            id === "kpi-utilization" ||
-            id === "kpi-capture"
-          ) {
-            k.removeAttribute("title");
-          }
+    [
+      "kpi-enrollment",
+      "kpi-capacity",
+      "kpi-utilization",
+      "kpi-capture",
+      "kpi-charter-capture",
+    ].forEach(function (id) {
+      var k = document.getElementById(id);
+      if (k) {
+        k.textContent = "—";
+        k.classList.add("kpi-value--placeholder");
+        k.classList.remove("kpi-value--choice-na");
+        if (
+          id === "kpi-enrollment" ||
+          id === "kpi-capacity" ||
+          id === "kpi-utilization" ||
+          id === "kpi-capture" ||
+          id === "kpi-charter-capture"
+        ) {
+          k.removeAttribute("title");
         }
       }
-    );
+    });
     renderEnrollmentChart(null);
     renderDemographicsCharts(null);
     renderSankeyPanel(null);
+    renderEseFeederFlowsTable(null);
   }
 
-  /** Dropdown drives map framing, selection highlight, and left panel; map clicks do not call this. */
+  /**
+   * Applies the current #school-select value: highlight, map frame, left panel, student hex.
+   * If `pendingMapSelectFrame` is "centerOnSchool" (set just before a map point/parcel pick), pans to the
+   * school with no zoom change. Otherwise (dropdown or map boundary) uses `zoomToSchoolAssignment`.
+   */
+  function applyExistingSchoolFromSelectValue(schoolByMsid) {
+    var sel = document.getElementById("school-select");
+    if (!sel) return;
+    var v = sel.value;
+    if (!v) {
+      pendingMapSelectFrame = null;
+      clearSelectedSchoolHighlight();
+      resetLeftPanelPlaceholders();
+      syncStudentHexLayer();
+      return;
+    }
+    var msid = Number(v);
+    if (isNaN(msid)) return;
+    var p = schoolByMsid[msid];
+    if (!p) return;
+    var mapFrame = pendingMapSelectFrame;
+    pendingMapSelectFrame = null;
+    if (mapFrame !== "centerOnSchool" && mapFrame !== "assignment") {
+      mapFrame = "assignment";
+    }
+    applySelectedSchoolHighlight(msid);
+    if (mapFrame === "centerOnSchool") {
+      centerMapOnSchoolPoint(msid, schoolByMsid);
+    } else {
+      zoomToSchoolAssignment(msid, schoolByMsid);
+    }
+    updateLeftPanelFromSchool(p);
+    syncStudentHexLayer();
+  }
+
   function setupSchoolSelection(schoolByMsid) {
     var sel = document.getElementById("school-select");
     if (!sel) return;
 
     sel.addEventListener("change", function () {
-      var v = sel.value;
-      if (!v) {
-        clearSelectedSchoolHighlight();
-        resetLeftPanelPlaceholders();
-        syncStudentHexLayer();
-        return;
-      }
-      var msid = Number(v);
-      if (isNaN(msid)) return;
-      var p = schoolByMsid[msid];
-      if (!p) return;
-
-      applySelectedSchoolHighlight(msid);
-      zoomToSchoolAssignment(msid, schoolByMsid);
-      updateLeftPanelFromSchool(p);
-      syncStudentHexLayer();
+      applyExistingSchoolFromSelectValue(schoolByMsid);
     });
   }
 
@@ -4329,12 +5228,6 @@
       maxWidth: "260px",
       className: "school-board-hover-popup",
       offset: 12,
-    });
-
-    var schoolClickPopup = new mapboxgl.Popup({
-      closeButton: true,
-      closeOnClick: true,
-      maxWidth: "300px",
     });
 
     var lastRingMsid = null;
@@ -4432,6 +5325,52 @@
       schoolHoverPopup.remove();
     }
 
+    /**
+     * When hovering a school location, show only that school's assignment outline (hover highlight)
+     * if the matching es/ms/hs fill is on. Temporarily clears the dropdown-selected assignment outline
+     * so only the hovered assignment is visible; call refreshAssignmentBoundaryHighlight when leaving
+     * (invalid msid, no zoned area, or layer off) to restore the selection.
+     */
+    function setAssignmentHoverHighlightForSchoolMsid(msid) {
+      if (msid == null || isNaN(msid)) {
+        clearOutlineHighlight();
+        clearHoverRing();
+        refreshAssignmentBoundaryHighlight();
+        return;
+      }
+      var src = findBoundarySourceForMsid(msid);
+      if (!src || !boundaryFillVisibleForSource(src)) {
+        clearOutlineHighlight();
+        clearHoverRing();
+        refreshAssignmentBoundaryHighlight();
+        return;
+      }
+      clearSelectedAssignmentBoundary();
+      if (lastOutline.source !== src || lastOutline.id !== msid) {
+        clearOutlineHighlight();
+        lastOutline.source = src;
+        lastOutline.id = msid;
+        try {
+          map.setFeatureState({ source: src, id: msid }, { highlight: true });
+        } catch (eH) {
+          /* ignore */
+        }
+      }
+      if (schoolByMsid[msid]) {
+        if (lastRingMsid !== msid) {
+          clearHoverRing();
+          lastRingMsid = msid;
+          try {
+            map.setFeatureState({ source: "schools", id: msid }, { ring: true });
+          } catch (eR) {
+            /* ignore */
+          }
+        }
+      } else {
+        clearHoverRing();
+      }
+    }
+
     function boundaryTitleText(props) {
       var msid = props.MSID != null ? Number(props.MSID) : null;
       var raw;
@@ -4521,9 +5460,16 @@
       ) {
         clearBoundaryHoverUi();
         var p = top.properties;
+        var hMsid = p.SCHOOLS_ID != null ? Number(p.SCHOOLS_ID) : null;
+        if (hMsid != null && !isNaN(hMsid)) {
+          setAssignmentHoverHighlightForSchoolMsid(hMsid);
+        } else {
+          clearOutlineHighlight();
+          clearHoverRing();
+          refreshAssignmentBoundaryHighlight();
+        }
         map.getCanvas().style.cursor = "pointer";
         schoolHoverPopup.setLngLat(e.lngLat).setHTML(schoolDetailHtml(p)).addTo(map);
-        refreshAssignmentBoundaryHighlight();
         return;
       }
 
@@ -4650,14 +5596,81 @@
       refreshAssignmentBoundaryHighlight();
     });
 
-    function onSchoolClick(e) {
-      var f = e.features && e.features[0];
-      if (!f || !f.properties) return;
-      schoolClickPopup.setLngLat(e.lngLat).setHTML(schoolDetailHtml(f.properties)).addTo(map);
+    function visibleClickLayers(orderedIds) {
+      var out = [];
+      for (var i = 0; i < orderedIds.length; i++) {
+        var lid = orderedIds[i];
+        try {
+          if (!map.getLayer(lid)) continue;
+          var v = map.getLayoutProperty(lid, "visibility");
+          if (v === "none") continue;
+          if (v === "visible" || v === undefined) out.push(lid);
+        } catch (errC) {
+          /* layer missing */
+        }
+      }
+      return out;
     }
 
-    SCHOOL_LAYER_IDS.forEach(function (layerId) {
-      map.on("click", layerId, onSchoolClick);
+    function firstTopFeatureInLayers(e, orderedLayerIds) {
+      var vis = visibleClickLayers(orderedLayerIds);
+      if (!vis.length) return null;
+      var feats = map.queryRenderedFeatures(e.point, { layers: vis });
+      return feats && feats.length ? feats[0] : null;
+    }
+
+    function msidFromMapPickFeature(f) {
+      if (!f || !f.properties) return null;
+      var lid = f.layer && f.layer.id ? f.layer.id : "";
+      if (SCHOOL_LAYER_IDS.indexOf(lid) >= 0) {
+        var s = f.properties.SCHOOLS_ID;
+        if (s == null || s === "") return null;
+        var m = Number(s);
+        return isNaN(m) ? null : m;
+      }
+      if (SCHOOL_PARCEL_LAYERS_CLICK_TOP_FIRST.indexOf(lid) >= 0) {
+        var s2 = f.properties.SCHOOLS_ID;
+        if (s2 == null || s2 === "") return null;
+        var m2 = Number(s2);
+        return isNaN(m2) ? null : m2;
+      }
+      if (ASSIGNMENT_BOUNDARY_LAYERS_CLICK_TOP_FIRST.indexOf(lid) >= 0) {
+        var s3 = f.properties.MSID;
+        if (s3 == null || s3 === "") return null;
+        var m3 = Number(s3);
+        return isNaN(m3) ? null : m3;
+      }
+      return null;
+    }
+
+    map.on("click", function (e) {
+      if (!isExistingConditionsViewActive()) return;
+      var fSch = firstTopFeatureInLayers(e, SCHOOL_LAYERS_CLICK_TOP_FIRST);
+      var fParc = fSch
+        ? null
+        : firstTopFeatureInLayers(e, SCHOOL_PARCEL_LAYERS_CLICK_TOP_FIRST);
+      var fBnd =
+        fSch || fParc
+          ? null
+          : firstTopFeatureInLayers(e, ASSIGNMENT_BOUNDARY_LAYERS_CLICK_TOP_FIRST);
+      var f = fSch || fParc || fBnd;
+      if (!f) return;
+      var msid = msidFromMapPickFeature(f);
+      if (msid == null) return;
+      if (!isMsidInSchoolSelectDropdown(msid)) return;
+      var sel = document.getElementById("school-select");
+      if (!sel) return;
+      if (fSch || fParc) {
+        pendingMapSelectFrame = "centerOnSchool";
+      } else {
+        pendingMapSelectFrame = "assignment";
+      }
+      if (String(sel.value) === String(msid)) {
+        applyExistingSchoolFromSelectValue(schoolByMsid);
+        return;
+      }
+      sel.value = String(msid);
+      sel.dispatchEvent(new Event("change", { bubbles: true }));
     });
   }
 

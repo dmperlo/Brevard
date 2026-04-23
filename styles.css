@@ -4,6 +4,11 @@
   box-sizing: border-box;
 }
 
+html {
+  height: 100%;
+  overflow: hidden;
+}
+
 html,
 body {
   margin: 0;
@@ -14,8 +19,14 @@ body {
   color: #1a1a1a;
 }
 
-/* No page scroll on login-only view (dashboard must not appear below the fold). */
-body:not(.dashboard-unlocked) {
+/* Lock the document viewport: only inner panels scroll (sidebar), not the full page. */
+body {
+  overflow: hidden;
+}
+
+body.dashboard-unlocked {
+  height: 100%;
+  max-height: 100vh;
   overflow: hidden;
 }
 
@@ -33,11 +44,14 @@ body:not(.dashboard-unlocked) {
 
 .login-gate {
   min-height: 100vh;
+  height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 32px 20px;
   background: #fff;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .login-gate__inner {
@@ -134,8 +148,9 @@ body:not(.dashboard-unlocked) {
   flex-direction: row;
   align-items: stretch;
   width: 100%;
-  height: 100vh;
-  min-height: 100vh;
+  height: 100%;
+  max-height: 100vh;
+  min-height: 0;
   overflow: hidden;
   background: #fff;
 }
@@ -509,7 +524,7 @@ body:not(.dashboard-unlocked) {
 
 @media (min-width: 520px) {
   .kpi-grid {
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 }
 
@@ -834,6 +849,62 @@ body:not(.dashboard-unlocked) {
   top: 2px;
 }
 
+.travel-impact-section {
+  margin: 14px 0 12px;
+  flex-shrink: 0;
+}
+
+.travel-impact-heading {
+  margin: 0 0 10px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #374151;
+}
+
+.travel-impact-charts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.travel-impact-chart-card {
+  flex: 1;
+  min-width: 240px;
+  max-width: 100%;
+  padding: 10px 12px 12px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+}
+
+.travel-impact-chart-title {
+  margin: 0 0 8px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: #4b5563;
+}
+
+.travel-impact-chart-body {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.travel-impact-chart-body .travel-hist-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-width: 100%;
+}
+
+.travel-hist-empty {
+  margin: 0;
+  font-size: 0.84rem;
+  color: #6b7280;
+  line-height: 1.45;
+}
+
 .demographics-row {
   display: flex;
   flex-wrap: wrap;
@@ -911,6 +982,67 @@ body:not(.dashboard-unlocked) {
   text-align: center;
 }
 
+.ese-feeder-section {
+  margin-top: 10px;
+  flex-shrink: 0;
+  padding: 10px 12px 12px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  width: 100%;
+}
+
+.ese-feeder-heading {
+  margin: 0 0 10px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: #4b5563;
+}
+
+.ese-feeder-table-wrap {
+  overflow-x: auto;
+}
+
+.ese-feeder-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: #374151;
+}
+
+.ese-feeder-table th,
+.ese-feeder-table td {
+  border: 1px solid #e5e7eb;
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.ese-feeder-table thead th {
+  font-weight: 700;
+  background: #f9fafb;
+  color: #111827;
+}
+
+.ese-feeder-col-program {
+  width: 1%;
+}
+
+.ese-feeder-program-label {
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: help;
+}
+
+.ese-feeder-placeholder {
+  color: #6b7280;
+  text-align: center;
+  padding: 12px 8px;
+}
+
 .dashboard-map-wrap {
   position: relative;
   flex: 1 1 auto;
@@ -922,9 +1054,10 @@ body:not(.dashboard-unlocked) {
 @media (max-width: 960px) {
   .dashboard {
     flex-direction: column;
-    overflow: auto;
-    height: auto;
-    min-height: 100vh;
+    overflow: hidden;
+    height: 100%;
+    max-height: 100vh;
+    min-height: 0;
   }
 
   .dashboard-resizer {
@@ -932,15 +1065,18 @@ body:not(.dashboard-unlocked) {
   }
 
   .dashboard-sidebar {
-    flex: 0 1 auto !important;
+    flex: 1 1 50%;
     width: 100% !important;
-    max-height: none;
+    min-height: 0;
+    max-height: 50vh;
+    overflow-y: auto;
+    overflow-x: hidden;
     border-bottom: 1px solid #e5e7eb;
   }
 
   .dashboard-map-wrap {
-    flex: 1 1 45vh;
-    min-height: 280px;
+    flex: 1 1 50%;
+    min-height: 240px;
     width: 100%;
   }
 }

@@ -101,7 +101,7 @@
               type="button"
               id="download-school-master-btn"
               class="sidebar-download-csv"
-              title="Download school_master.csv (enrollment, capacity, utilization, demographics)"
+              title="Download school_master.csv (enrollment, capacity, utilization, capture, charter capture, demographics)"
               aria-label="Download data as CSV (school_master.csv)"
             >
               Download Data as CSV
@@ -151,6 +151,10 @@
             <article class="kpi-card">
               <h2 class="kpi-label">Attendance Boundary Capture Rate</h2>
               <p class="kpi-value kpi-value--placeholder" id="kpi-capture">—</p>
+            </article>
+            <article class="kpi-card">
+              <h2 class="kpi-label">Attendance Boundary Charter Capture Rate</h2>
+              <p class="kpi-value kpi-value--placeholder" id="kpi-charter-capture">—</p>
             </article>
           </div>
         </section>
@@ -206,6 +210,26 @@
             </div>
           </div>
         </section>
+
+        <section class="ese-feeder-section" aria-labelledby="ese-feeder-heading">
+          <h2 class="ese-feeder-heading" id="ese-feeder-heading">
+            Exceptional Student Education Program Feeder Flows
+          </h2>
+          <div class="ese-feeder-table-wrap">
+            <table class="ese-feeder-table">
+              <thead>
+                <tr>
+                  <th scope="col" class="ese-feeder-col-program">
+                    <span class="visually-hidden">Program</span>
+                  </th>
+                  <th scope="col">Accepts students from</th>
+                  <th scope="col">Sends students to</th>
+                </tr>
+              </thead>
+              <tbody id="ese-feeder-tbody"></tbody>
+            </table>
+          </div>
+        </section>
         </div>
 
         <div
@@ -234,7 +258,7 @@
             </p>
             <p class="school-details-line school-details-meta">
               <span id="scenario-details-kpi" class="school-details-text school-details-placeholder"
-                >'25-26 Enrollment: — | Factored Capacity: — | Utilization: — | Attendance Boundary Capture Rate: —</span
+                >'25-26 Enrollment: — | Factored Capacity: — | Utilization: — | Attendance Boundary Capture Rate: — | Attendance Boundary Charter Capture Rate: —</span
               >
             </p>
           </div>
@@ -261,6 +285,41 @@
             <legend class="scenario-feeder-legend">Feeder elementary schools</legend>
             <ul id="scenario-feeder-list" class="scenario-feeder-list"></ul>
           </fieldset>
+
+          <section class="travel-impact-section" aria-labelledby="scenario-travel-impact-heading">
+            <h2 class="travel-impact-heading" id="scenario-travel-impact-heading">
+              Travel Distance Impacts
+            </h2>
+            <div class="travel-impact-charts">
+              <div class="travel-impact-chart-card">
+                <h3 class="travel-impact-chart-title">
+                  Existing Travel Distances to Attendance School
+                </h3>
+                <div
+                  id="scenario-travel-existing"
+                  class="travel-impact-chart-body"
+                  aria-live="polite"
+                >
+                  <p class="travel-hist-empty">Select a middle school to view travel distances.</p>
+                </div>
+              </div>
+              <div class="travel-impact-chart-card">
+                <h3
+                  class="travel-impact-chart-title"
+                  id="scenario-travel-scenario-chart-title"
+                >
+                  Scenario Travel Distances to Selected Middle School
+                </h3>
+                <div
+                  id="scenario-travel-scenario"
+                  class="travel-impact-chart-body"
+                  aria-live="polite"
+                >
+                  <p class="travel-hist-empty">Select a middle school to view travel distances.</p>
+                </div>
+              </div>
+            </div>
+          </section>
 
           <section class="demographics-row" aria-label="Merged demographics">
             <div class="demographics-chart-card">
