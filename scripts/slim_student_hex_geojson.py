@@ -1,15 +1,13 @@
 """
-Aggregate StudentHexagons.geojson: one Feature per (GRID_ID, MSID) with student count.
+Legacy: aggregate StudentHexagons.geojson to one Feature per (GRID_ID, MSID) with a count.
 
-The dashboard source repeats the same hex polygon once per student; OBJECTID differs
-per row, so keys must use GRID_ID (see app.js studentHexKey). This script removes
-duplicate geometries and strips properties to MSID, GRID_ID, count.
+The dashboard now expects one GeoJSON feature per student (attendance MSID, GRID_ID, and
+per-student attributes). Do not run this on the current workflow unless you intentionally
+want a smaller file and accept losing per-student Grade / zoned-school fields.
 
-Usage (from repo root):
+Historical usage (not recommended for current data):
+
   py -3 scripts/slim_student_hex_geojson.py geo/StudentHexagons.geojson geo/StudentHexagons_slim.geojson
-
-Then replace the original after verifying:
-  move /Y geo\\StudentHexagons_slim.geojson geo\\StudentHexagons.geojson
 """
 
 from __future__ import annotations

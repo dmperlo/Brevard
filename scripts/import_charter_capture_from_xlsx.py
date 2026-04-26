@@ -1,4 +1,5 @@
-# One-time import: 251010ChartersFromAnalysis.xlsx -> charter_capture_rate in data/school_master.csv
+# Legacy one-time import: 251010ChartersFromAnalysis.xlsx -> charter_capture_rate (old schema).
+# Dashboard capture KPIs are populated by scripts/import_fromto_capture_rates.py (From-To matrices).
 # Sheet "PrintCharters", column D = short school name, column V = decimal fraction.
 # PrintCharters row layout: rows 8–60 elementary, 63–74 middle, 75+ high (incl. jr/sr high).
 

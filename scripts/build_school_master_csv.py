@@ -95,14 +95,6 @@ def type_to_level(type_str: str) -> str:
     return "middle"
 
 
-def palette_key_from_level(level: str) -> str:
-    if level == "elementary":
-        return "elementary"
-    if level == "middle":
-        return "middle"
-    return "high"
-
-
 def out_num(v):
     """Write enrollment / demographic counts: empty only when missing; keep 0 as 0."""
     if v is None:
@@ -171,7 +163,15 @@ def main():
         [
             "factored_capacity_2025_26",
             "utilization_2025_26",
-            "capture_rate",
+            "assignment_capture_rate",
+            "other_district_capture_rate",
+            "choice_capture_rate",
+            "charter_capture_rate",
+            "fromto_resident_denominator",
+            "assignment_capture_students",
+            "other_district_capture_students",
+            "choice_capture_students",
+            "charter_capture_students",
         ]
     )
     for _label, slug in ETH_SLUGS:
@@ -228,10 +228,6 @@ def main():
                 if b.get("captureRatePct") is not None:
                     level = band
                     break
-        pkey = palette_key_from_level(level) if level else "middle"
-        bucket = cap_row.get(pkey) or {}
-        cap_pct = bucket.get("captureRatePct")
-        cap_dec = "" if cap_pct is None else round(float(cap_pct) / 100.0, 6)
 
         drow = demo_by.get(ek) or {}
         eth_src = drow.get("ethnicity") or {}
@@ -252,7 +248,15 @@ def main():
             "sy2526_actual": out_num(sy2526),
             "factored_capacity_2025_26": out_num(fc),
             "utilization_2025_26": util_dec,
-            "capture_rate": cap_dec,
+            "assignment_capture_rate": "",
+            "other_district_capture_rate": "",
+            "choice_capture_rate": "",
+            "charter_capture_rate": "",
+            "fromto_resident_denominator": "",
+            "assignment_capture_students": "",
+            "other_district_capture_students": "",
+            "choice_capture_students": "",
+            "charter_capture_students": "",
         }
 
         for y in CAL_YEARS:

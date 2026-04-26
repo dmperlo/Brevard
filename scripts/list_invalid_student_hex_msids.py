@@ -1,8 +1,8 @@
 """
-List raw MSID values from StudentHexagons features that the slim script skips
-(missing, non-numeric, or NaN). Run against the full (pre-aggregation) export:
+List raw MSID values from StudentHexagons features that are invalid for indexing
+(missing, non-numeric, or NaN). Run against the repo GeoJSON (one feature per student):
 
-  py -3 scripts/list_invalid_student_hex_msids.py geo/StudentHexagons_full_backup.geojson
+  py -3 scripts/list_invalid_student_hex_msids.py geo/StudentHexagons.geojson
 
 Prints counts and unique raw values to stdout. Optional JSON output:
 

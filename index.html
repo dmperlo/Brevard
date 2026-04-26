@@ -69,7 +69,7 @@
           </div>
           <div class="sidebar-top-bar__row sidebar-top-bar__row--switcher">
             <div
-              class="page-switcher basemap-segmented"
+              class="page-switcher page-switcher--triple basemap-segmented"
               role="tablist"
               aria-label="Dashboard view"
             >
@@ -96,12 +96,23 @@
               >
                 Scenario Planning
               </button>
+              <button
+                type="button"
+                role="tab"
+                id="page-tab-sandbox"
+                data-page="sandbox"
+                aria-selected="false"
+                aria-controls="page-sandbox"
+                title="Boundary Sandbox"
+              >
+                Boundary Sandbox
+              </button>
             </div>
             <button
               type="button"
               id="download-school-master-btn"
               class="sidebar-download-csv"
-              title="Download school_master.csv (enrollment, capacity, utilization, capture, charter capture, demographics)"
+              title="Download school_master.csv (enrollment, capacity, utilization, From-To capture KPIs, demographics)"
               aria-label="Download data as CSV (school_master.csv)"
             >
               Download Data as CSV
@@ -135,7 +146,7 @@
           </div>
 
         <section class="kpi-section" aria-label="Key metrics">
-          <div class="kpi-grid">
+          <div class="kpi-grid kpi-grid--primary">
             <article class="kpi-card">
               <h2 class="kpi-label">'25-26 Enrollment</h2>
               <p class="kpi-value kpi-value--placeholder" id="kpi-enrollment">—</p>
@@ -148,14 +159,36 @@
               <h2 class="kpi-label">Utilization</h2>
               <p class="kpi-value kpi-value--placeholder" id="kpi-utilization">—</p>
             </article>
-            <article class="kpi-card">
-              <h2 class="kpi-label">Attendance Boundary Capture Rate</h2>
-              <p class="kpi-value kpi-value--placeholder" id="kpi-capture">—</p>
-            </article>
-            <article class="kpi-card">
-              <h2 class="kpi-label">Attendance Boundary Charter Capture Rate</h2>
-              <p class="kpi-value kpi-value--placeholder" id="kpi-charter-capture">—</p>
-            </article>
+          </div>
+          <div class="kpi-capture-panel">
+            <h2 class="enrollment-chart-heading">Attendance Boundary Capture Rates</h2>
+            <div
+              class="kpi-grid kpi-grid--capture"
+              role="group"
+              aria-label="Attendance boundary capture rates by category"
+            >
+              <article class="kpi-card">
+                <p
+                  class="kpi-capture-card-label"
+                  id="kpi-capture-assigned-label"
+                >
+                  Selected School
+                </p>
+                <p class="kpi-value kpi-value--placeholder" id="kpi-assignment-capture">—</p>
+              </article>
+              <article class="kpi-card">
+                <p class="kpi-capture-card-label">Other Traditional School</p>
+                <p class="kpi-value kpi-value--placeholder" id="kpi-other-district-capture">—</p>
+              </article>
+              <article class="kpi-card">
+                <p class="kpi-capture-card-label">Choice School</p>
+                <p class="kpi-value kpi-value--placeholder" id="kpi-choice-capture">—</p>
+              </article>
+              <article class="kpi-card">
+                <p class="kpi-capture-card-label">Charter School</p>
+                <p class="kpi-value kpi-value--placeholder" id="kpi-charter-capture">—</p>
+              </article>
+            </div>
           </div>
         </section>
 
@@ -257,8 +290,13 @@
               >
             </p>
             <p class="school-details-line school-details-meta">
-              <span id="scenario-details-kpi" class="school-details-text school-details-placeholder"
-                >'25-26 Enrollment: — | Factored Capacity: — | Utilization: — | Attendance Boundary Capture Rate: — | Attendance Boundary Charter Capture Rate: —</span
+              <span id="scenario-details-kpi-primary" class="school-details-text school-details-placeholder"
+                >'25-26 Enrollment: — | Factored Capacity: — | Utilization: —</span
+              >
+            </p>
+            <p class="school-details-line school-details-meta">
+              <span id="scenario-details-kpi-capture" class="school-details-text school-details-placeholder"
+                >Assignment: — | Other district: — | Choice: — | Charter: —</span
               >
             </p>
           </div>
@@ -281,8 +319,32 @@
             </div>
           </section>
 
-          <fieldset class="scenario-feeder-fieldset">
-            <legend class="scenario-feeder-legend">Feeder elementary schools</legend>
+          <fieldset
+            class="scenario-feeder-fieldset"
+            aria-label="Feeder elementary schools and remaining enrollment"
+          >
+            <legend class="visually-hidden">
+              Feeder elementary schools and remaining enrollment per elementary
+            </legend>
+            <div class="scenario-feeder-heading-row">
+              <span class="scenario-feeder-heading-main">Feeder elementary schools</span>
+              <div class="scenario-feeder-heading-metrics">
+                <span
+                  class="scenario-feeder-remaining-heading"
+                  id="scenario-feeder-remaining-heading"
+                  title="Count of students remaining at their original feeder elementary school under this consolidation scenario."
+                >
+                  Remaining ES Enrollment
+                </span>
+                <span
+                  class="scenario-feeder-util-heading"
+                  id="scenario-feeder-util-heading"
+                  title="2025-26 utilization from school_master.csv, and the utilization if Remaining ES Enrollment were the only enrollment on that school’s factored capacity."
+                >
+                  Change in Utilization
+                </span>
+              </div>
+            </div>
             <ul id="scenario-feeder-list" class="scenario-feeder-list"></ul>
           </fieldset>
 
@@ -344,6 +406,223 @@
             </div>
           </section>
         </div>
+
+        <div
+          id="page-sandbox"
+          class="sidebar-page-panel sidebar-page-panel--sandbox"
+          role="tabpanel"
+          aria-labelledby="sidebar-brand-main sidebar-view-title"
+          hidden
+        >
+          <section
+            class="sandbox-howto"
+            aria-label="Boundary sandbox instructions"
+          >
+            <h2 class="sandbox-howto__title">How to use</h2>
+            <ol class="sandbox-howto__list">
+              <li>Optionally choose a <strong>base school</strong> to load all student residences zoned to that assignment, or leave it blank to start from the map only.</li>
+              <li>
+                Choose a selection tool (lasso or paintbrush) and mode (select or erase). A single click on a hex
+                (without dragging) always toggles that hex on or off, no matter which mode is on. If a hex is not
+                selectable, it is because no students live there.
+              </li>
+              <li>
+                Click <strong>Confirm selection</strong> to load or refresh the summaries. Change hexes on the map anytime; summaries
+                update only when you confirm. Use <strong>Clear selection</strong> to remove all selected hexes.
+              </li>
+            </ol>
+          </section>
+
+          <div class="sandbox-controls">
+            <label class="visually-hidden" for="sandbox-base-school">Base school (optional)</label>
+            <select
+              id="sandbox-base-school"
+              class="school-select sandbox-base-school"
+              disabled
+            >
+              <option value="">Loading…</option>
+            </select>
+            <p class="sandbox-hint" id="sandbox-base-hint">
+              Optional: choose a base school to load all zoned student residences. You can add or remove hexes using the tools below.
+            </p>
+            <fieldset class="sandbox-hex-tool-fieldset" aria-label="Map selection tools">
+              <legend class="sandbox-hex-tool-legend">Map selection tools</legend>
+              <div class="sandbox-hex-tool-bar">
+                <div
+                  class="sandbox-hex-tool-toggles"
+                  role="radiogroup"
+                  aria-label="Map shape: lasso or paintbrush"
+                >
+                  <label class="sandbox-hex-tool-option"
+                    ><input
+                      type="radio"
+                      name="sandbox-hex-tool"
+                      value="lasso"
+                      class="sandbox-hex-tool"
+                      id="sandbox-hex-tool-lasso"
+                      checked
+                    />
+                    <span>Lasso</span></label
+                  >
+                  <label class="sandbox-hex-tool-option"
+                    ><input
+                      type="radio"
+                      name="sandbox-hex-tool"
+                      value="brush"
+                      class="sandbox-hex-tool"
+                      id="sandbox-hex-tool-paintbrush"
+                    />
+                    <span>Paintbrush</span></label
+                  >
+                </div>
+                <div class="sandbox-hex-mode-group" aria-hidden="true">|</div>
+                <div
+                  class="sandbox-hex-tool-toggles sandbox-hex-mode-toggles"
+                  role="radiogroup"
+                  aria-label="Add or remove hexes: select or erase"
+                >
+                  <label class="sandbox-hex-tool-option"
+                    ><input
+                      type="radio"
+                      name="sandbox-hex-mode"
+                      value="select"
+                      class="sandbox-hex-mode"
+                      id="sandbox-hex-mode-select"
+                      checked
+                    />
+                    <span>Select</span></label
+                  >
+                  <label class="sandbox-hex-tool-option"
+                    ><input
+                      type="radio"
+                      name="sandbox-hex-mode"
+                      value="erase"
+                      class="sandbox-hex-mode"
+                      id="sandbox-hex-mode-erase"
+                    />
+                    <span>Erase</span></label
+                  >
+                </div>
+                <div class="sandbox-hex-tool-actions" role="group" aria-label="Selection actions">
+                  <button
+                    type="button"
+                    class="sandbox-confirm-btn"
+                    id="sandbox-confirm-btn"
+                    aria-disabled="true"
+                  >
+                    Confirm selection
+                  </button>
+                  <button
+                    type="button"
+                    class="sandbox-clear-btn"
+                    id="sandbox-clear-btn"
+                    title="Remove all selected student-residence hexes from this sandbox (Clear selection)"
+                  >
+                    Clear selection
+                  </button>
+                </div>
+              </div>
+            </fieldset>
+            <p class="sandbox-hint sandbox-hex-count" id="sandbox-hex-count" aria-live="polite">
+              No hexes selected — use the map
+            </p>
+          </div>
+
+          <section
+            class="kpi-section sandbox-stats-section"
+            aria-label="Students in your boundary sandbox selection"
+          >
+            <h2 class="enrollment-chart-heading" id="sandbox-stats-heading">
+              Students in selection
+            </h2>
+            <p class="sandbox-placeholder" id="sandbox-stats-lead">
+              Choose hexes on the map (or a base school), then <strong>Confirm</strong> for grade,
+              attendance, zoned, and demographics from the student hex layer.
+            </p>
+            <div class="sandbox-placeholder-cards">
+              <div class="sandbox-card sandbox-card--stat">
+                <h3 class="sandbox-card__title">By grade</h3>
+                <div
+                  class="sandbox-card__body"
+                  id="sandbox-card-body-grade"
+                  aria-label="Student counts by grade in selection"
+                >
+                  —
+                </div>
+              </div>
+              <div
+                class="sandbox-card sandbox-card--stat"
+                id="sandbox-card-attendance-type"
+              >
+                <h3 class="sandbox-card__title">By attendance type</h3>
+                <div
+                  class="sandbox-card__body"
+                  id="sandbox-card-body-attendance-type"
+                  aria-label="Zoned Traditional School, Other Traditional School, Charter School, and Choice School attendance in selection"
+                >
+                  —
+                </div>
+              </div>
+              <div
+                class="sandbox-stat-bicolumn"
+                role="group"
+                aria-label="By current enrollment and by current assignment"
+              >
+                <div class="sandbox-card sandbox-card--stat">
+                  <h3 class="sandbox-card__title">By current enrollment (attendance)</h3>
+                  <div
+                    class="sandbox-card__body"
+                    id="sandbox-card-body-attendance"
+                    aria-label="Students by attending school in selection"
+                  >
+                    —
+                  </div>
+                </div>
+                <div class="sandbox-card sandbox-card--stat">
+                  <h3 class="sandbox-card__title">By current assignment (zoned)</h3>
+                  <div
+                    class="sandbox-card__body"
+                    id="sandbox-card-body-zoned"
+                    aria-label="Students by zoned school in selection"
+                  >
+                    —
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section
+            class="demographics-row demographics-row--sandbox"
+            aria-label="Demographics in the confirmed selection"
+          >
+            <h2 class="enrollment-chart-heading" id="sandbox-demographics-heading">
+              Student demographics
+            </h2>
+            <div class="demographics-row demographics-row--sandbox-inner">
+              <div class="demographics-chart-card">
+                <h3 class="demographics-chart-title">Race and Ethnicity</h3>
+                <div
+                  id="sandbox-demographics-ethnicity"
+                  class="demographics-chart-body"
+                  aria-live="polite"
+                >
+                  <p class="demographics-pie-empty">No selection confirmed yet.</p>
+                </div>
+              </div>
+              <div class="demographics-chart-card">
+                <h3 class="demographics-chart-title">Free and Reduced Lunch</h3>
+                <div
+                  id="sandbox-demographics-lunch"
+                  class="demographics-chart-body"
+                  aria-live="polite"
+                >
+                  <p class="demographics-pie-empty">No selection confirmed yet.</p>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
       </aside>
 
       <div
@@ -389,14 +668,85 @@
                 </h2>
                 <div class="toggles" id="charter-school-toggles"></div>
               </section>
+              <section class="layer-section" aria-labelledby="heading-travel-sheds">
+                <h2 class="layer-section-title" id="heading-travel-sheds">Travel sheds</h2>
+                <div class="travel-shed-menu-stack">
+                  <div class="toggles" id="travel-shed-toggles"></div>
+                  <div
+                    class="travel-shed-max-miles-row"
+                    id="travel-shed-max-miles-row"
+                    hidden
+                  >
+                    <div class="travel-shed-max-miles-label" id="travel-shed-max-miles-label">
+                      Show network travel sheds up to
+                    </div>
+                    <div class="travel-shed-max-miles-control">
+                      <input
+                        type="range"
+                        id="travel-shed-max-miles"
+                        min="1"
+                        max="10"
+                        value="10"
+                        step="1"
+                        aria-label="Show network travel sheds up to a maximum distance, up to 10 miles"
+                        aria-valuemin="1"
+                        aria-valuemax="10"
+                        aria-valuenow="10"
+                        aria-valuetext="10 miles"
+                      />
+                      <output
+                        class="travel-shed-max-miles-output"
+                        id="travel-shed-max-miles-output"
+                        for="travel-shed-max-miles"
+                        >10 mi</output>
+                    </div>
+                  </div>
+                </div>
+              </section>
               <section class="layer-section" aria-labelledby="heading-student-hex">
                 <h2 class="layer-section-title" id="heading-student-hex">
                   Student Residence Density
                 </h2>
-                <p class="layer-section-hint" id="student-hex-layer-hint">
-                  Only students attending selected school.
-                </p>
-                <div class="toggles" id="student-hex-toggles"></div>
+                <div class="student-hex-menu-stack">
+                  <div class="toggles" id="student-hex-toggles"></div>
+                  <div
+                    class="student-hex-residence-modes"
+                    id="student-hex-residence-modes"
+                    role="group"
+                    aria-label="Student residence cohort"
+                  >
+                    <label class="student-hex-tooltip-label" for="toggle-student-hex-attending">
+                      <input type="checkbox" id="toggle-student-hex-attending" checked />
+                      <span>Attending selected school</span>
+                    </label>
+                    <label class="student-hex-tooltip-label" for="toggle-student-hex-zoned">
+                      <input type="checkbox" id="toggle-student-hex-zoned" />
+                      <span>Zoned to selected school</span>
+                    </label>
+                  </div>
+                  <div
+                    class="toggles"
+                    id="charter-student-hex-toggles"
+                    aria-label="Charter student residence map"
+                  ></div>
+                  <div
+                    class="student-hex-tooltip-row"
+                    id="student-hex-tooltip-row"
+                    hidden
+                  >
+                    <label
+                      class="student-hex-tooltip-label"
+                      for="toggle-student-hex-density-tooltip"
+                    >
+                      <input
+                        type="checkbox"
+                        id="toggle-student-hex-density-tooltip"
+                        checked
+                      />
+                      <span>Show density tooltip</span>
+                    </label>
+                  </div>
+                </div>
               </section>
               <section class="layer-section" aria-labelledby="heading-school-board-districts">
                 <h2 class="layer-section-title" id="heading-school-board-districts">
@@ -433,9 +783,49 @@
           </div>
         </header>
         <div id="map" role="application" aria-label="Interactive map"></div>
+        <aside
+          class="map-density-legend"
+          id="map-density-legend"
+          hidden
+          aria-label="Residence density color scale"
+        >
+          <div class="map-density-legend__row" id="map-density-legend-student" hidden>
+            <div class="map-density-legend__title">Student residences</div>
+            <div
+              class="map-density-legend__bar map-density-legend__bar--student"
+              role="img"
+              id="map-density-legend-student-scale"
+              aria-label="Color scale: cyan through blue and purple to yellow; numbers are neighborhood-mean students per square mile in view"
+            ></div>
+            <div class="map-density-legend__axis">
+              <span class="map-density-legend__val" id="map-density-legend-student-min">—</span>
+              <span class="map-density-legend__val" id="map-density-legend-student-max">—</span>
+            </div>
+            <p class="map-density-legend__val-note">
+              Neighborhood-mean students per square mile (min - max) in view
+            </p>
+          </div>
+          <div class="map-density-legend__row" id="map-density-legend-charter" hidden>
+            <div class="map-density-legend__title">Charter student residences</div>
+            <div
+              class="map-density-legend__bar map-density-legend__bar--charter"
+              role="img"
+              id="map-density-legend-charter-scale"
+              aria-label="Color scale: light to vivid magenta and pink; numbers are neighborhood-mean charter students per square mile in view"
+            ></div>
+            <div class="map-density-legend__axis">
+              <span class="map-density-legend__val" id="map-density-legend-charter-min">—</span>
+              <span class="map-density-legend__val" id="map-density-legend-charter-max">—</span>
+            </div>
+            <p class="map-density-legend__val-note">
+              Neighborhood-mean students per square mile (min - max) in view
+            </p>
+          </div>
+        </aside>
       </div>
     </div>
     <script src="https://api.mapbox.com/mapbox-gl-js/v3.8.0/mapbox-gl.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@turf/turf@7.2.0/turf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
     <script src="https://unpkg.com/d3-sankey@0.12.3/dist/d3-sankey.min.js"></script>
     <script>

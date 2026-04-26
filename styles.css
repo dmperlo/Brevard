@@ -226,10 +226,16 @@ body.dashboard-unlocked {
   justify-content: space-between;
 }
 
-.sidebar-top-bar__row--switcher {
-  justify-content: flex-start;
+/* Tabs: intrinsic width (no stretched grey box) + CSV aligned to the right. */
+.sidebar-top-bar__row.sidebar-top-bar__row--switcher {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
   align-items: center;
-  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 10px 14px;
+  width: 100%;
+  min-width: 0;
 }
 
 .sidebar-download-csv {
@@ -313,7 +319,10 @@ body.dashboard-unlocked {
 }
 
 .page-switcher {
-  flex-shrink: 0;
+  /* Triple variant overrides: shrink-wrap tab strip, cap width in narrow sidebars. */
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .page-switcher.basemap-segmented button {
@@ -323,6 +332,36 @@ body.dashboard-unlocked {
   max-width: 11.5rem;
   white-space: normal;
   text-align: center;
+}
+
+/* Three dashboard tabs: hug content (grey bar ends after last tab); same type size as .sidebar-download-csv. */
+.page-switcher.page-switcher--triple.basemap-segmented {
+  width: max-content;
+  min-width: 0;
+  max-width: 100%;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  box-sizing: border-box;
+  flex-shrink: 1;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Override general basemap button rules: one line; match .sidebar-download-csv (0.72rem / 1.25 / 6px vertical). */
+.page-switcher.page-switcher--triple.basemap-segmented button {
+  max-width: none;
+  min-width: min-content;
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 0.72rem;
+  line-height: 1.25;
+  padding: 6px 8px;
+  white-space: nowrap;
+  text-align: center;
+  overflow: visible;
+  text-overflow: clip;
 }
 
 .sidebar-page-panel {
@@ -336,6 +375,469 @@ body.dashboard-unlocked {
 /* [hidden] must win over .sidebar-page-panel { display: flex } or both views stack visibly. */
 .sidebar-page-panel[hidden] {
   display: none !important;
+}
+
+.sidebar-page-panel--sandbox {
+  gap: 14px;
+}
+
+.sandbox-howto {
+  padding: 10px 10px 12px;
+  border-radius: 6px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.sandbox-howto__title {
+  margin: 0 0 8px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #475569;
+}
+
+.sandbox-howto__list {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  color: #334155;
+}
+
+.sandbox-howto__list li {
+  margin-bottom: 6px;
+}
+
+.sandbox-howto__list li:last-child {
+  margin-bottom: 0;
+}
+
+.sandbox-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sandbox-hint,
+.sandbox-placeholder,
+.sandbox-placeholder--demog {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: #6b7280;
+}
+
+.sandbox-hint code {
+  font-size: 0.72em;
+  background: #f1f5f9;
+  padding: 0 0.2em;
+  border-radius: 2px;
+}
+
+.sandbox-hex-tool-fieldset {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #fafafa;
+}
+
+.sandbox-hex-tool-legend {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #64748b;
+  padding: 0 4px;
+}
+
+.sandbox-hex-tool-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 2px;
+}
+
+.sandbox-hex-tool-bar .sandbox-hex-tool-toggles {
+  margin-top: 0;
+}
+
+.sandbox-hex-mode-group {
+  color: #cbd5e1;
+  font-size: 0.78rem;
+  line-height: 1;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.sandbox-hex-tool-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin-top: 2px;
+}
+
+.sandbox-hex-tool-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.78rem;
+  color: #334155;
+  cursor: pointer;
+  user-select: none;
+}
+
+.sandbox-hex-tool-option input {
+  margin: 0;
+  flex-shrink: 0;
+  accent-color: #475569;
+  cursor: pointer;
+}
+
+.sandbox-confirm-btn,
+.sandbox-clear-btn {
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 500;
+  padding: 6px 12px;
+  border-radius: 5px;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  color: #1e293b;
+  cursor: pointer;
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.04);
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease,
+    box-shadow 0.12s ease,
+    transform 0.08s ease;
+}
+
+.sandbox-confirm-btn:hover:not(.is-inert) {
+  background: #fff;
+  border-color: #94a3b8;
+  box-shadow: 0 2px 4px rgba(15, 23, 42, 0.06);
+}
+
+.sandbox-confirm-btn--pending:not(.is-inert) {
+  background: #f0fdf4;
+  border-color: #4ade80;
+  color: #14532d;
+  box-shadow: 0 0 0 1px rgba(74, 222, 128, 0.25);
+}
+
+.sandbox-confirm-btn--pending:hover:not(.is-inert) {
+  background: #dcfce7;
+  border-color: #22c55e;
+  box-shadow: 0 2px 4px rgba(20, 83, 45, 0.12);
+}
+
+.sandbox-clear-btn:hover {
+  background: #fef2f2;
+  border-color: #f87171;
+  color: #991b1b;
+  box-shadow: 0 2px 4px rgba(153, 27, 27, 0.1);
+}
+
+.sandbox-confirm-btn:active:not(.is-inert),
+.sandbox-clear-btn:active {
+  transform: translateY(1px);
+  box-shadow: 0 0 0 rgba(0, 0, 0, 0);
+}
+
+.sandbox-confirm-btn:focus-visible,
+.sandbox-clear-btn:focus-visible {
+  outline: 2px solid #64748b;
+  outline-offset: 2px;
+}
+
+.sandbox-confirm-btn.is-inert {
+  opacity: 0.72;
+  cursor: not-allowed;
+  box-shadow: none;
+  color: #64748b;
+  background: #f1f5f9;
+}
+
+.sandbox-confirm-btn:not(.is-inert):not(.sandbox-confirm-btn--pending) {
+  background: #fff;
+  border-color: #94a3b8;
+  color: #0f172a;
+}
+
+.sandbox-base-school {
+  width: 100%;
+  max-width: 100%;
+}
+
+.sandbox-placeholder-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+/* By enrollment and by zoned, side by side (wraps like demographics). */
+.sandbox-stat-bicolumn {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  width: 100%;
+  align-items: stretch;
+  flex-shrink: 0;
+}
+
+.sandbox-stat-bicolumn .sandbox-card--stat {
+  flex: 1 1 12.5rem;
+  min-width: 0;
+}
+
+.sandbox-card {
+  border: 1px dashed #cbd5e1;
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: #fff;
+}
+
+.sandbox-card--placeholder {
+  color: #94a3b8;
+}
+
+.sandbox-card--stat {
+  border-style: solid;
+  border-color: #e2e8f0;
+  color: #334155;
+}
+
+.sandbox-card--stat .sandbox-card__body {
+  line-height: 1.45;
+  min-height: 2.4rem;
+}
+
+.sandbox-stat-line {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 4px 8px;
+  margin-bottom: 2px;
+  font-size: 0.78rem;
+}
+
+.sandbox-stat-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: #475569;
+}
+
+.sandbox-stat-val {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.sandbox-stat-note {
+  margin-top: 4px;
+  margin-bottom: 0;
+  font-size: 0.72rem;
+  color: #64748b;
+  font-style: italic;
+}
+
+.sandbox-school-list {
+  width: 100%;
+  min-width: 0;
+}
+
+.sandbox-school-list-scroll {
+  max-height: 9.5rem;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 2px 4px 4px 2px;
+  border-radius: 4px;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  margin: 0 0 4px 0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+button.sandbox-school-expand {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 500;
+  line-height: 1.3;
+  text-align: left;
+  color: #334155;
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+button.sandbox-school-expand:hover {
+  background: #e2e8f0;
+  border-color: #94a3b8;
+  color: #0f172a;
+}
+
+.sandbox-grade-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+}
+
+.sandbox-grade-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px 6px;
+  min-width: 0;
+  font-size: 0.75rem;
+}
+
+.sandbox-grade-check {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1rem;
+  min-width: 1.1rem;
+}
+
+.sandbox-grade-check input {
+  width: 0.85rem;
+  height: 0.85rem;
+  margin: 0;
+  cursor: pointer;
+  accent-color: #525252;
+}
+
+.sandbox-grade-label-col {
+  flex: 0 0 1.4rem;
+  min-width: 1.4rem;
+  text-align: right;
+  color: #475569;
+  font-variant-numeric: tabular-nums;
+}
+
+.sandbox-grade-bar-area {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.sandbox-grade-bar-outer {
+  width: 100%;
+  height: 9px;
+  border-radius: 3px;
+  background: #e2e8f0;
+  overflow: hidden;
+}
+
+.sandbox-grade-bar-inner {
+  height: 100%;
+  min-width: 0;
+  border-radius: 2px;
+  background: linear-gradient(90deg, #525252, #9ca3af);
+  transition: width 0.2s ease, opacity 0.15s ease;
+}
+
+.sandbox-grade-bar-inner.is-excluded {
+  opacity: 0.38;
+  background: linear-gradient(90deg, #94a3b8, #cbd5e1);
+}
+
+.sandbox-grade-count-col {
+  flex: 0 0 2.25rem;
+  min-width: 2.25rem;
+  text-align: right;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: #0f172a;
+}
+
+.sandbox-grade-total {
+  margin: 6px 0 0;
+  font-size: 0.72rem;
+  color: #64748b;
+  text-align: right;
+}
+
+/* "By attendance type" uses the same bar layout as the grade card; full school type names. */
+.sandbox-grade-chart--attendance .sandbox-grade-label-col {
+  flex: 0 1 12.5rem;
+  min-width: 7.5rem;
+  max-width: 16rem;
+  text-align: left;
+  line-height: 1.3;
+  white-space: normal;
+}
+
+.sandbox-grade-bar-inner.sandbox-atype--zoned {
+  background: linear-gradient(90deg, #16a34a, #4ade80);
+}
+
+.sandbox-grade-bar-inner.sandbox-atype--other {
+  background: linear-gradient(90deg, #64748b, #94a3b8);
+}
+
+.sandbox-grade-bar-inner.sandbox-atype--charter {
+  background: linear-gradient(90deg, #be185d, #f472b6);
+}
+
+.sandbox-grade-bar-inner.sandbox-atype--choice {
+  background: linear-gradient(90deg, #1d4ed8, #93c5fd);
+}
+
+.sandbox-card__title {
+  margin: 0 0 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: none;
+  letter-spacing: 0.02em;
+}
+
+.sandbox-card__body {
+  margin: 0;
+  font-size: 0.8rem;
+}
+
+.sandbox-stats-section {
+  margin: 0;
+}
+
+.sandbox-stats-section .enrollment-chart-heading {
+  margin: 0 0 4px;
+}
+
+.demographics-row--sandbox {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.demographics-row--sandbox .enrollment-chart-heading {
+  margin: 0;
+}
+
+/* Match main sidebar `.demographics-row`: two pie cards side by side when width allows. */
+.demographics-row--sandbox-inner {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 10px;
+  width: 100%;
+  align-items: flex-start;
+  flex-shrink: 0;
 }
 
 .sidebar-page-panel--scenario {
@@ -407,16 +909,48 @@ body.dashboard-unlocked {
   background: #fafafa;
 }
 
-.scenario-feeder-legend {
-  padding: 0 6px;
-  font-size: 0.82rem;
-  font-weight: 700;
+.scenario-feeder-heading-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 0 6px 8px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid #e5e7eb;
+  font-size: 0.84rem;
   color: #374151;
+}
+
+.scenario-feeder-heading-metrics {
+  display: flex;
+  flex-shrink: 0;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 0.4rem;
+}
+
+.scenario-feeder-heading-main {
+  font-weight: 700;
+}
+
+.scenario-feeder-remaining-heading,
+.scenario-feeder-util-heading {
+  flex-shrink: 0;
+  font-weight: 700;
+  text-align: right;
+}
+
+.scenario-feeder-remaining-heading {
+  min-width: 5.25rem;
+}
+
+.scenario-feeder-util-heading {
+  min-width: 10rem;
 }
 
 .scenario-feeder-list {
   margin: 0;
-  padding: 0;
+  padding: 0 6px;
   list-style: none;
 }
 
@@ -462,7 +996,35 @@ body.dashboard-unlocked {
   line-height: 1.35;
 }
 
+.scenario-feeder-item-metrics {
+  display: flex;
+  flex-shrink: 0;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  margin-left: auto;
+}
+
+.scenario-feeder-remaining {
+  flex: 0 0 auto;
+  min-width: 5.25rem;
+  text-align: right;
+  color: #1f2937;
+  line-height: 1.35;
+  font-variant-numeric: tabular-nums;
+}
+
+.scenario-feeder-util-change {
+  flex: 0 0 auto;
+  min-width: 10rem;
+  text-align: right;
+  color: #1f2937;
+  line-height: 1.35;
+  font-variant-numeric: tabular-nums;
+}
+
 .scenario-feeder-flag {
+  flex-basis: 100%;
   font-size: 0.72rem;
   font-weight: 600;
   text-transform: uppercase;
@@ -512,20 +1074,56 @@ body.dashboard-unlocked {
   font-style: italic;
 }
 
+.scenario-school-details #scenario-details-kpi-capture:not(.school-details-placeholder) {
+  cursor: help;
+}
+
 .kpi-section {
   flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .kpi-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
   gap: 10px;
+  grid-template-columns: repeat(2, 1fr);
 }
 
 @media (min-width: 520px) {
-  .kpi-grid {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+  .kpi-grid--primary {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
+
+  .kpi-grid--capture {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.kpi-capture-panel {
+  padding: 12px 12px 10px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+}
+
+.kpi-capture-card-label {
+  margin: 0 0 8px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: #374151;
+}
+
+.kpi-capture-panel .kpi-card {
+  padding: 14px 8px 12px;
+}
+
+.kpi-capture-panel .kpi-value {
+  font-size: 1.2rem;
 }
 
 .kpi-card {
@@ -535,6 +1133,10 @@ body.dashboard-unlocked {
   border: 1px solid #e5e7eb;
   border-radius: 4px;
   text-align: center;
+}
+
+.kpi-card[title] {
+  cursor: help;
 }
 
 .kpi-label {
@@ -556,6 +1158,7 @@ body.dashboard-unlocked {
   font-size: 0.95rem;
   line-height: 1.25;
   font-weight: 600;
+  color: #9ca3af;
 }
 
 .kpi-value--placeholder {
@@ -1222,6 +1825,151 @@ body.dashboard-unlocked {
   color: #6b7280;
 }
 
+.travel-shed-menu-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+#travel-shed-max-miles-row[hidden] {
+  display: none !important;
+}
+
+.travel-shed-max-miles-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 2px;
+  padding: 0 0 0 1px;
+}
+
+.travel-shed-max-miles-label {
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: #4b5563;
+}
+
+.travel-shed-max-miles-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Grey neutral slider (not app accent blue) */
+.travel-shed-max-miles-control input[type="range"] {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  height: 1.25rem;
+  cursor: pointer;
+  color: #6b7280;
+  background: transparent;
+  accent-color: #6b7280;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.travel-shed-max-miles-control input[type="range"]::-webkit-slider-runnable-track {
+  height: 0.3rem;
+  background: #d1d5db;
+  border-radius: 0.2rem;
+}
+
+.travel-shed-max-miles-control input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 0.9rem;
+  height: 0.9rem;
+  margin-top: -0.3rem;
+  background: #6b7280;
+  border-radius: 50%;
+  border: 0;
+  box-shadow: 0 0 0 1px #e5e7eb;
+  cursor: pointer;
+}
+
+.travel-shed-max-miles-control input[type="range"]::-moz-range-track {
+  height: 0.3rem;
+  background: #d1d5db;
+  border-radius: 0.2rem;
+  border: 0;
+}
+
+.travel-shed-max-miles-control input[type="range"]::-moz-range-thumb {
+  width: 0.9rem;
+  height: 0.9rem;
+  background: #6b7280;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.travel-shed-max-miles-output {
+  flex-shrink: 0;
+  min-width: 2.75rem;
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: #1f2937;
+  text-align: right;
+}
+
+.student-hex-menu-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.student-hex-menu-stack #charter-student-hex-toggles {
+  margin: 0;
+}
+
+.student-hex-menu-stack .student-hex-tooltip-row {
+  margin-top: 0;
+}
+
+.student-hex-residence-modes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+}
+
+.student-hex-residence-modes input[type="checkbox"]:disabled + span {
+  color: #9ca3af;
+}
+
+.student-hex-residence-modes--inactive {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+#charter-student-hex-toggles label {
+  font-size: 0.85rem;
+  line-height: 1.35;
+}
+
+.student-hex-tooltip-row {
+  margin-top: 6px;
+}
+
+.student-hex-tooltip-label {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 0.85rem;
+  line-height: 1.35;
+  color: inherit;
+}
+
+.student-hex-tooltip-label input[type="checkbox"] {
+  margin-top: 0.2em;
+  flex-shrink: 0;
+  accent-color: #2563eb;
+}
+
 .toggles {
   display: flex;
   flex-wrap: wrap;
@@ -1310,11 +2058,141 @@ body.dashboard-unlocked {
   );
 }
 
+.toggle-gradient-strip--charter-magenta {
+  background: linear-gradient(
+    90deg,
+    #ffffff 0%,
+    #fcc5e7 8%,
+    #fcb9e3 18%,
+    #fcabde 30%,
+    #fd9cd8 42%,
+    #fd8ed3 54%,
+    #fe80ce 66%,
+    #fe70c8 78%,
+    #ff5cc0 88%,
+    #ff51da 95%,
+    #ff40ff 100%
+  );
+}
+
+/* Aligned to school-isochrones-fill 1–10 mi palette (light near → dark far). */
+.toggle-gradient-strip--travel-sheds {
+  background: linear-gradient(
+    90deg,
+    #fffbeb 0%,
+    #fef3c7 11%,
+    #fde68a 22%,
+    #fcd34d 33%,
+    #fbbf24 44%,
+    #d97706 55%,
+    #b45309 66%,
+    #92400e 77%,
+    #78350f 88%,
+    #451a03 100%
+  );
+}
+
 #map {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
+}
+
+/* Bottom-right of map; above default attribution. Does not block map interaction. */
+.map-density-legend {
+  position: absolute;
+  z-index: 2;
+  right: 8px;
+  left: auto;
+  bottom: 32px;
+  max-width: min(240px, calc(100% - 100px));
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  font-family: "Franklin Gothic Book", "Franklin Gothic", "Libre Franklin", "Arial Narrow",
+    sans-serif;
+  font-size: 0.72rem;
+  line-height: 1.25;
+  color: #334155;
+  pointer-events: none;
+}
+
+.map-density-legend[hidden] {
+  display: none !important;
+}
+
+.map-density-legend__row {
+  margin-top: 8px;
+}
+
+.map-density-legend__row:first-child {
+  margin-top: 0;
+}
+
+.map-density-legend__title {
+  font-weight: 600;
+  font-size: 0.74rem;
+  margin-bottom: 4px;
+  color: #1e293b;
+}
+
+.map-density-legend__bar {
+  height: 10px;
+  width: 100%;
+  min-width: 0;
+  border-radius: 3px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+}
+
+/* Ramps align with `heatmap-color` in app.js for student-hex-heatmap and charter-student-hex-heatmap. */
+.map-density-legend__bar--student {
+  background: linear-gradient(
+    90deg,
+    rgba(34, 211, 238, 0.2) 0%,
+    rgba(56, 189, 248, 0.5) 12%,
+    rgba(98, 88, 230, 0.6) 28%,
+    rgba(147, 51, 234, 0.7) 44%,
+    rgba(219, 39, 119, 0.8) 62%,
+    rgba(234, 88, 12, 0.9) 78%,
+    rgba(255, 251, 200, 1) 100%
+  );
+}
+
+.map-density-legend__bar--charter {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(252, 197, 231, 0.45) 8%,
+    rgba(252, 171, 222, 0.65) 32%,
+    rgba(254, 128, 206, 0.82) 58%,
+    rgba(255, 92, 192, 0.9) 80%,
+    rgba(255, 64, 255, 0.94) 100%
+  );
+}
+
+.map-density-legend__axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 3px;
+  font-size: 0.7rem;
+  color: #334155;
+  font-variant-numeric: tabular-nums;
+}
+
+.map-density-legend__val {
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.map-density-legend__val-note {
+  margin: 2px 0 0;
+  font-size: 0.6rem;
+  color: #94a3b8;
+  text-align: center;
 }
 
 .mapboxgl-ctrl {
@@ -1371,4 +2249,164 @@ body.dashboard-unlocked {
 
 .school-hover-popup .mapboxgl-popup-content {
   padding: 8px 10px;
+}
+
+.travel-shed-hover-popup .mapboxgl-popup-content {
+  padding: 6px 8px;
+  line-height: 1.3;
+  font-size: 12px;
+  color: #1f2937;
+  max-width: 430px;
+}
+
+.travel-shed-hover-popup .travel-shed-hover-inner {
+  font-family: "Franklin Gothic Book", "Franklin Gothic", "Libre Franklin", "Arial Narrow",
+    sans-serif;
+}
+
+.travel-shed-hover-title {
+  font-family: "Franklin Gothic Medium", "Franklin Gothic", "ITC Franklin Gothic", "Libre Franklin",
+    "Arial Narrow", sans-serif;
+  font-weight: 700;
+  font-size: 0.8rem;
+  line-height: 1.3;
+  margin: 0 0 6px;
+  color: #111827;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+/* Single column: header + stack of rows; no internal scroll. */
+.travel-shed-residence-grades--1col {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.78rem;
+  margin-top: 2px;
+}
+
+/* Two panes: each has its own Grade / Student Residences header. */
+.travel-shed-residence-grades--2col {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 0.65rem 0.85rem;
+  font-size: 0.78rem;
+  margin-top: 2px;
+}
+
+.travel-shed-residence-pane {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.travel-shed-residence-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(3.25rem, auto);
+  align-items: baseline;
+  gap: 0.4rem 0.5rem;
+  padding: 0 0 3px;
+  margin-bottom: 2px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: #4b5563;
+  border-bottom: 1px solid #d1d5db;
+}
+
+.travel-shed-residence-h-n {
+  text-align: right;
+  font-weight: 600;
+}
+
+.travel-shed-residence-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px 0;
+}
+
+.travel-shed-residence-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(3.25rem, auto);
+  align-items: baseline;
+  gap: 0.4rem 0.5rem;
+  font-variant-numeric: tabular-nums;
+  color: #374151;
+}
+
+.travel-shed-residence-row--served {
+  color: #111827;
+}
+
+.travel-shed-residence-grade {
+  min-width: 0;
+}
+
+.travel-shed-residence-n {
+  text-align: right;
+  flex: 0 0 auto;
+}
+
+.travel-shed-residence-n strong {
+  font-weight: 700;
+}
+
+.travel-shed-residence-empty {
+  margin: 0.4rem 0 0;
+  font-size: 0.75rem;
+  line-height: 1.3;
+  color: #6b7280;
+}
+
+.student-hex-hover-popup .mapboxgl-popup-content {
+  padding: 8px 10px;
+  line-height: 1.35;
+}
+
+.student-hex-hover-popup .student-hex-hover-inner {
+  font-family: "Franklin Gothic Book", "Franklin Gothic", "Libre Franklin", "Arial Narrow",
+    sans-serif;
+  font-size: 12px;
+  color: #1f2937;
+}
+
+.student-hex-hover-popup .student-hex-hover-line {
+  font-weight: 600;
+}
+
+.student-hex-hover-popup .student-hex-hover-value {
+  font-variant-numeric: tabular-nums;
+}
+
+.student-hex-hover-popup .student-hex-hover-unit {
+  font-weight: 400;
+}
+
+.student-hex-hover-popup .student-hex-hover-sub {
+  margin-top: 6px;
+  font-size: 11px;
+  font-weight: 400;
+  color: #4b5563;
+}
+
+.student-hex-hover-popup .student-hex-hover-dual {
+  min-width: 0;
+}
+
+.student-hex-hover-popup .student-hex-hover-section + .student-hex-hover-section {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.student-hex-hover-popup .student-hex-hover-section-title {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #6b7280;
+  margin: 0 0 4px;
 }

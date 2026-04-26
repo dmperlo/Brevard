@@ -1,7 +1,6 @@
-# Recalculates capture_rate in data/school_master.csv as sy2526_actual / zoned_denominator.
-# Denominators come from data/processed/capture_by_msid.json (student-level zoned counts).
-# StudentHexagons.geojson in this repo has no ELEM_/MID_/HIGH_ fields; see capture JSON notes.
-# MSIDs 2031 and 2041 (Meadowlane) are skipped: use data/processed/meadowlane_capture_override.json + app logic.
+# Legacy script: recalculated legacy capture_rate from student export + capture_by_msid.json.
+# The dashboard now uses From-To capture columns from scripts/import_fromto_capture_rates.py.
+# If school_master.csv already has assignment_capture_rate, this script exits without changes.
 
 $ErrorActionPreference = "Stop"
 # Project root = parent of scripts/
@@ -11,6 +10,12 @@ if (-not (Test-Path (Join-Path $base "data\school_master.csv"))) {
 }
 $csvPath = Join-Path $base "data\school_master.csv"
 $capPath = Join-Path $base "data\processed\capture_by_msid.json"
+
+$probe = Import-Csv $csvPath | Select-Object -First 1
+if ($probe.PSObject.Properties.Name -contains "assignment_capture_rate") {
+  Write-Host "school_master.csv uses From-To capture columns; no action. Use: py -3 scripts/import_fromto_capture_rates.py"
+  exit 0
+}
 
 $json = Get-Content $capPath -Raw | ConvertFrom-Json
 $cap = $json.byMsid
