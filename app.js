@@ -279,12 +279,16 @@
   var BOUNDARY_SANDBOX = {
     selectedHexKeys: Object.create(null),
     selectionConfirmed: false,
+    /** Copy of `selectedHexKeys` at last Confirm; drives sidebar stats while the map selection is edited. */
+    confirmedHexKeysSnapshot: Object.create(null),
     /** @type {Object<string, boolean|undefined>} canonical grade key (e.g. "K", "07") → include in att/zoned/demographics */
     gradeToggles: Object.create(null),
     /** @type {Object<string, boolean|undefined>} `zonedTraditional` | `otherTraditional` | `charter` | `choice` → include in att/zoned/demographics (after grade filter) */
     attendanceTypeToggles: Object.create(null),
     /** @type {{ attendance: boolean, zoned: boolean }} */
     schoolListExpanded: { attendance: false, zoned: false },
+    /** Single Polygon/MultiPolygon for lasso tint/outline; grows via turf.union (select), shrinks via turf.difference (erase). */
+    lassoRegionFootprintFeature: null,
   };
 
   /**
@@ -1735,6 +1739,45 @@
           layout: { visibility: "none" },
         });
 
+        map.addSource("boundary-sandbox-lasso-region-fill", {
+          type: "geojson",
+          data: { type: "FeatureCollection", features: [] },
+        });
+        map.addLayer({
+          id: "boundary-sandbox-lasso-region-fill",
+          type: "fill",
+          source: "boundary-sandbox-lasso-region-fill",
+          paint: {
+            "fill-color": "#84cc16",
+            "fill-opacity": 0.14,
+          },
+          layout: { visibility: "none" },
+        });
+        map.addSource("boundary-sandbox-lasso-region-outline", {
+          type: "geojson",
+          data: { type: "FeatureCollection", features: [] },
+        });
+        map.addLayer({
+          id: "boundary-sandbox-lasso-region-outline",
+          type: "line",
+          source: "boundary-sandbox-lasso-region-outline",
+          paint: {
+            "line-color": "#65a30d",
+            "line-width": [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              8,
+              1,
+              12,
+              1.25,
+              16,
+              1.5,
+            ],
+            "line-opacity": 0.88,
+          },
+          layout: { visibility: "none" },
+        });
         map.addSource("boundary-sandbox-hex", {
           type: "geojson",
           data: { type: "FeatureCollection", features: [] },
@@ -1745,13 +1788,38 @@
           type: "fill",
           source: "boundary-sandbox-hex",
           paint: {
-            "fill-color": "#d97706",
+            "fill-color": "#84cc16",
             "fill-opacity": [
               "case",
               ["boolean", ["feature-state", "selected"], false],
               0.4,
               0,
             ],
+          },
+          layout: { visibility: "none" },
+        });
+        map.addSource("boundary-sandbox-selection-outline", {
+          type: "geojson",
+          data: { type: "FeatureCollection", features: [] },
+        });
+        map.addLayer({
+          id: "boundary-sandbox-selection-outline-line",
+          type: "line",
+          source: "boundary-sandbox-selection-outline",
+          paint: {
+            "line-color": "#65a30d",
+            "line-width": [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              8,
+              2,
+              12,
+              2.75,
+              16,
+              3.5,
+            ],
+            "line-opacity": 0.92,
           },
           layout: { visibility: "none" },
         });
@@ -2273,6 +2341,271 @@
     return !!(p && !p.hidden);
   }
 
+  function shallowCopyHexKeyBag(from) {
+    var o = Object.create(null);
+    if (!from) {
+      return o;
+    }
+    for (var k in from) {
+      if (Object.prototype.hasOwnProperty.call(from, k) && from[k]) {
+        o[k] = true;
+      }
+    }
+    return o;
+  }
+
+  function countSandboxHexKeys(bag) {
+    var n = 0;
+    if (!bag) {
+      return 0;
+    }
+    for (var kb in bag) {
+      if (Object.prototype.hasOwnProperty.call(bag, kb) && bag[kb]) {
+        n++;
+      }
+    }
+    return n;
+  }
+
+  /**
+   * Keys used for sidebar aggregates: live selection when confirmed; otherwise last confirmed snapshot.
+   * @returns {Object<string, boolean>|null}
+   */
+  function getHexKeysForSandboxStatistics() {
+    if (BOUNDARY_SANDBOX.selectionConfirmed) {
+      return BOUNDARY_SANDBOX.selectedHexKeys;
+    }
+    if (countSandboxHexKeys(BOUNDARY_SANDBOX.confirmedHexKeysSnapshot) > 0) {
+      return BOUNDARY_SANDBOX.confirmedHexKeysSnapshot;
+    }
+    return null;
+  }
+
+  /**
+   * Turf v7 `polygonToLine` returns a Feature *or* a FeatureCollection (MultiPolygon → multiple lines).
+   * Mapbox sources must receive a proper FeatureCollection of Feature objects, not a nested FC.
+   * @param {GeoJSON.Feature<GeoJSON.Polygon|GeoJSON.MultiPolygon>|null} polyFeature
+   * @returns {GeoJSON.FeatureCollection|null}
+   */
+  function turfPolygonToLineAsFeatureCollection(polyFeature) {
+    if (!polyFeature || !polyFeature.geometry) {
+      return null;
+    }
+    var gt = polyFeature.geometry.type;
+    if (gt !== "Polygon" && gt !== "MultiPolygon") {
+      return null;
+    }
+    if (typeof turf === "undefined" || !turf || typeof turf.polygonToLine !== "function") {
+      return null;
+    }
+    try {
+      var r = turf.polygonToLine(polyFeature);
+      if (!r) {
+        return null;
+      }
+      if (r.type === "FeatureCollection") {
+        return r.features && r.features.length ? r : null;
+      }
+      if (r.type === "Feature") {
+        return { type: "FeatureCollection", features: [r] };
+      }
+      return null;
+    } catch (err) {
+      return null;
+    }
+  }
+
+  /**
+   * Turf v7 `union` takes one FeatureCollection of polygons; two-arg `union(a,b)` does not merge correctly.
+   * @param {GeoJSON.Feature<GeoJSON.Polygon|GeoJSON.MultiPolygon>} polyA
+   * @param {GeoJSON.Feature<GeoJSON.Polygon|GeoJSON.MultiPolygon>} polyB
+   * @returns {GeoJSON.Feature<GeoJSON.Polygon|GeoJSON.MultiPolygon>|null}
+   */
+  function turfUnionPolygonFeatures(polyA, polyB) {
+    if (!polyA || !polyB || typeof turf === "undefined" || !turf || typeof turf.union !== "function") {
+      return null;
+    }
+    try {
+      var fc =
+        typeof turf.featureCollection === "function"
+          ? turf.featureCollection([polyA, polyB])
+          : { type: "FeatureCollection", features: [polyA, polyB] };
+      return turf.union(fc);
+    } catch (err) {
+      return null;
+    }
+  }
+
+  /**
+   * Turf v7 `difference`: FeatureCollection where result is first polygon minus overlap with the rest.
+   * @returns {GeoJSON.Feature<GeoJSON.Polygon|GeoJSON.MultiPolygon>|null}
+   */
+  function turfDifferencePolygonFeatures(polyA, polyB) {
+    if (!polyA || !polyB || !polyA.geometry || !polyB.geometry) {
+      return null;
+    }
+    var ta = polyA.geometry.type;
+    var tb = polyB.geometry.type;
+    if ((ta !== "Polygon" && ta !== "MultiPolygon") || (tb !== "Polygon" && tb !== "MultiPolygon")) {
+      return null;
+    }
+    if (typeof turf === "undefined" || !turf || typeof turf.difference !== "function") {
+      return null;
+    }
+    try {
+      var fc =
+        typeof turf.featureCollection === "function"
+          ? turf.featureCollection([polyA, polyB])
+          : { type: "FeatureCollection", features: [polyA, polyB] };
+      return turf.difference(fc);
+    } catch (err) {
+      return null;
+    }
+  }
+
+  /**
+   * Merge multiple Polygon/MultiPolygon features into one (used for zoned-hex footprint union).
+   * @param {GeoJSON.Feature[]} feats
+   * @returns {GeoJSON.Feature|null}
+   */
+  function mergePolygonFeatureArrayToOne(feats) {
+    if (!feats || !feats.length) {
+      return null;
+    }
+    if (feats.length === 1) {
+      return feats[0];
+    }
+    if (typeof turf === "undefined" || !turf || typeof turf.union !== "function") {
+      return null;
+    }
+    try {
+      if (typeof turf.featureCollection === "function" && feats.length > 2) {
+        var bulk = turf.union(turf.featureCollection(feats));
+        if (bulk && bulk.geometry) {
+          return bulk;
+        }
+      }
+    } catch (eBulk) {
+      /* pairwise fallback below */
+    }
+    var merged = feats[0];
+    for (var i = 1; i < feats.length; i++) {
+      var unn = turfUnionPolygonFeatures(merged, feats[i]);
+      if (unn && unn.geometry) {
+        merged = unn;
+      }
+    }
+    return merged && merged.geometry ? merged : null;
+  }
+
+  /**
+   * Sets `lassoRegionFootprintFeature` to the union of all currently selected hex geometries (light green tint
+   * between hexes, including base-school zoned loads). Does not change hex selection state.
+   */
+  function syncSandboxLassoFootprintFromSelectedHexGeometries() {
+    if (!STUDENT_HEX_INDEX || !STUDENT_HEX_INDEX.geometryByHexKey) {
+      BOUNDARY_SANDBOX.lassoRegionFootprintFeature = null;
+      syncBoundarySandboxLassoRegionSourcesFromAccumulator();
+      return;
+    }
+    var gk = STUDENT_HEX_INDEX.geometryByHexKey;
+    var bag = BOUNDARY_SANDBOX.selectedHexKeys;
+    var feats = [];
+    for (var sk in bag) {
+      if (!Object.prototype.hasOwnProperty.call(bag, sk) || !bag[sk]) {
+        continue;
+      }
+      var g = gk[sk];
+      if (!g) {
+        continue;
+      }
+      feats.push({ type: "Feature", properties: {}, geometry: g });
+    }
+    if (!feats.length) {
+      BOUNDARY_SANDBOX.lassoRegionFootprintFeature = null;
+    } else {
+      var merged = mergePolygonFeatureArrayToOne(feats);
+      BOUNDARY_SANDBOX.lassoRegionFootprintFeature = merged && merged.geometry ? merged : null;
+    }
+    syncBoundarySandboxLassoRegionSourcesFromAccumulator();
+  }
+
+  /**
+   * Shared boundary of confirmed hex polygons only (no convex hull — avoids enclosing unselected gaps).
+   * @param {GeoJSON.Feature[]} feats Each feature’s geometry should be a Polygon or MultiPolygon.
+   * @returns {GeoJSON.FeatureCollection|null} Line features for stroke (may be multiple lines after union).
+   */
+  function sandboxConfirmedHexUnionToOutlineLineFeature(feats) {
+    if (!feats || !feats.length || typeof turf === "undefined") {
+      return null;
+    }
+    try {
+      var merged = feats[0];
+      if (feats.length > 1) {
+        for (var i = 1; i < feats.length; i++) {
+          var unn = turfUnionPolygonFeatures(merged, feats[i]);
+          if (unn && unn.geometry) {
+            merged = unn;
+          }
+        }
+      }
+      return turfPolygonToLineAsFeatureCollection(merged);
+    } catch (err) {
+      return null;
+    }
+  }
+
+  /** Outer perimeter of the last confirmed selection only (`confirmedHexKeysSnapshot`), via polygon union. */
+  function updateBoundarySandboxSelectionOutline() {
+    if (!map || !map.getSource("boundary-sandbox-selection-outline")) {
+      return;
+    }
+    var empty = { type: "FeatureCollection", features: [] };
+    var gk = STUDENT_HEX_INDEX && STUDENT_HEX_INDEX.geometryByHexKey;
+    if (!gk || typeof turf === "undefined") {
+      try {
+        map.getSource("boundary-sandbox-selection-outline").setData(empty);
+      } catch (e0) {
+        /* ignore */
+      }
+      return;
+    }
+    var snap = BOUNDARY_SANDBOX.confirmedHexKeysSnapshot;
+    var feats = [];
+    for (var ks in snap) {
+      if (!Object.prototype.hasOwnProperty.call(snap, ks) || !snap[ks]) {
+        continue;
+      }
+      var g = gk[ks];
+      if (!g) {
+        continue;
+      }
+      feats.push({ type: "Feature", properties: {}, geometry: g });
+    }
+    if (!feats.length) {
+      try {
+        map.getSource("boundary-sandbox-selection-outline").setData(empty);
+      } catch (e1) {
+        /* ignore */
+      }
+      return;
+    }
+    var outlineFcResult = sandboxConfirmedHexUnionToOutlineLineFeature(feats);
+    if (!outlineFcResult || !outlineFcResult.features || !outlineFcResult.features.length) {
+      try {
+        map.getSource("boundary-sandbox-selection-outline").setData(empty);
+      } catch (e2) {
+        /* ignore */
+      }
+      return;
+    }
+    try {
+      map.getSource("boundary-sandbox-selection-outline").setData(outlineFcResult);
+    } catch (e3) {
+      /* ignore */
+    }
+  }
+
   /** @returns {number|null} MSID from #sandbox-base-school, or null. */
   function getSandboxBaseSchoolMsid() {
     var sel = document.getElementById("sandbox-base-school");
@@ -2366,7 +2699,9 @@
     }
     BOUNDARY_SANDBOX.selectedHexKeys = Object.create(null);
     BOUNDARY_SANDBOX.selectionConfirmed = false;
+    BOUNDARY_SANDBOX.confirmedHexKeysSnapshot = Object.create(null);
     clearBoundarySandboxLassoLine();
+    clearBoundarySandboxLassoRegionFill();
     BOUNDARY_SANDBOX_PAINT = {
       active: false,
       lastKey: null,
@@ -2423,6 +2758,204 @@
     return a;
   }
 
+  /**
+   * Closed lng/lat ring → GeoJSON Polygon for lasso “footprint” fill (hex gaps with no student data).
+   * @param {number[][]} ring
+   * @returns {Object|null} Feature or null
+   */
+  function closedLngLatRingToSandboxPolygonFeature(ring) {
+    if (!ring || ring.length < 3) {
+      return null;
+    }
+    var r = closeRingIfNeeded(ring);
+    if (r.length < 4) {
+      return null;
+    }
+    return {
+      type: "Feature",
+      properties: {},
+      geometry: { type: "Polygon", coordinates: [r] },
+    };
+  }
+
+  /**
+   * Outer rings of polygon features → LineString features (fallback outline when Turf is unavailable).
+   * @param {Object[]} polyFeatures
+   * @returns {Object[]}
+   */
+  function sandboxPolygonFeaturesToOutlineLineFeatures(polyFeatures) {
+    var out = [];
+    if (!polyFeatures || !polyFeatures.length) {
+      return out;
+    }
+    for (var i = 0; i < polyFeatures.length; i++) {
+      var f = polyFeatures[i];
+      if (!f || !f.geometry) {
+        continue;
+      }
+      if (f.geometry.type === "Polygon") {
+        var rings = f.geometry.coordinates;
+        if (!rings || !rings[0] || rings[0].length < 4) {
+          continue;
+        }
+        out.push({
+          type: "Feature",
+          properties: {},
+          geometry: { type: "LineString", coordinates: rings[0] },
+        });
+        continue;
+      }
+      if (f.geometry.type === "MultiPolygon") {
+        var mp = f.geometry.coordinates;
+        for (var pi = 0; pi < mp.length; pi++) {
+          var polyRing = mp[pi] && mp[pi][0];
+          if (!polyRing || polyRing.length < 4) {
+            continue;
+          }
+          out.push({
+            type: "Feature",
+            properties: {},
+            geometry: { type: "LineString", coordinates: polyRing },
+          });
+        }
+      }
+    }
+    return out;
+  }
+
+  function syncBoundarySandboxLassoRegionSourcesFromAccumulator() {
+    if (!map) {
+      return;
+    }
+    var footprint = BOUNDARY_SANDBOX.lassoRegionFootprintFeature;
+    var emptyFc = { type: "FeatureCollection", features: [] };
+    if (!footprint || !footprint.geometry) {
+      if (map.getSource("boundary-sandbox-lasso-region-fill")) {
+        try {
+          map.getSource("boundary-sandbox-lasso-region-fill").setData(emptyFc);
+        } catch (eE0) {
+          /* ignore */
+        }
+      }
+      if (map.getSource("boundary-sandbox-lasso-region-outline")) {
+        try {
+          map.getSource("boundary-sandbox-lasso-region-outline").setData(emptyFc);
+        } catch (eE1) {
+          /* ignore */
+        }
+      }
+      return;
+    }
+    var gt = footprint.geometry.type;
+    if (gt !== "Polygon" && gt !== "MultiPolygon") {
+      if (map.getSource("boundary-sandbox-lasso-region-fill")) {
+        try {
+          map.getSource("boundary-sandbox-lasso-region-fill").setData(emptyFc);
+        } catch (eE2) {
+          /* ignore */
+        }
+      }
+      if (map.getSource("boundary-sandbox-lasso-region-outline")) {
+        try {
+          map.getSource("boundary-sandbox-lasso-region-outline").setData(emptyFc);
+        } catch (eE3) {
+          /* ignore */
+        }
+      }
+      return;
+    }
+    var fillFc = { type: "FeatureCollection", features: [footprint] };
+    var outlineFc = turfPolygonToLineAsFeatureCollection(footprint) || emptyFc;
+    if (!outlineFc.features || outlineFc.features.length === 0) {
+      outlineFc = {
+        type: "FeatureCollection",
+        features: sandboxPolygonFeaturesToOutlineLineFeatures([footprint]),
+      };
+    }
+    if (map.getSource("boundary-sandbox-lasso-region-fill")) {
+      try {
+        map.getSource("boundary-sandbox-lasso-region-fill").setData(fillFc);
+      } catch (eFill) {
+        /* ignore */
+      }
+    }
+    if (map.getSource("boundary-sandbox-lasso-region-outline")) {
+      try {
+        map.getSource("boundary-sandbox-lasso-region-outline").setData(outlineFc);
+      } catch (eOut) {
+        /* ignore */
+      }
+    }
+  }
+
+  function clearBoundarySandboxLassoRegionFill() {
+    BOUNDARY_SANDBOX.lassoRegionFootprintFeature = null;
+    if (!map || !map.getSource("boundary-sandbox-lasso-region-fill")) {
+      return;
+    }
+    try {
+      map.getSource("boundary-sandbox-lasso-region-fill").setData({
+        type: "FeatureCollection",
+        features: [],
+      });
+    } catch (eClr) {
+      /* ignore */
+    }
+    if (map.getSource("boundary-sandbox-lasso-region-outline")) {
+      try {
+        map.getSource("boundary-sandbox-lasso-region-outline").setData({
+          type: "FeatureCollection",
+          features: [],
+        });
+      } catch (eClr2) {
+        /* ignore */
+      }
+    }
+  }
+
+  /**
+   * Select-mode lasso: union the new ring into `lassoRegionFootprintFeature`.
+   * @param {number[][]|null} closedRing
+   */
+  function applySelectLassoToLassoRegionFootprint(closedRing) {
+    var feat = closedLngLatRingToSandboxPolygonFeature(closedRing || []);
+    if (!feat) {
+      return;
+    }
+    var fp = BOUNDARY_SANDBOX.lassoRegionFootprintFeature;
+    if (!fp || !fp.geometry) {
+      BOUNDARY_SANDBOX.lassoRegionFootprintFeature = feat;
+    } else {
+      var u = turfUnionPolygonFeatures(fp, feat);
+      if (u && u.geometry) {
+        BOUNDARY_SANDBOX.lassoRegionFootprintFeature = u;
+      }
+    }
+    syncBoundarySandboxLassoRegionSourcesFromAccumulator();
+  }
+
+  /**
+   * Erase-mode lasso: subtract the ring from the green footprint (turf.difference); clears tint if nothing left.
+   * @param {number[][]|null} closedRing
+   */
+  function applyEraseLassoToLassoRegionFootprint(closedRing) {
+    var fp = BOUNDARY_SANDBOX.lassoRegionFootprintFeature;
+    if (!fp || !fp.geometry) {
+      return;
+    }
+    var eraseFeat = closedLngLatRingToSandboxPolygonFeature(closedRing || []);
+    if (!eraseFeat) {
+      return;
+    }
+    var d = turfDifferencePolygonFeatures(fp, eraseFeat);
+    if (d && d.geometry) {
+      BOUNDARY_SANDBOX.lassoRegionFootprintFeature = d;
+    } else {
+      BOUNDARY_SANDBOX.lassoRegionFootprintFeature = null;
+    }
+    syncBoundarySandboxLassoRegionSourcesFromAccumulator();
+  }
+
   function applyLassoToHexSelection(closedRing) {
     if (!STUDENT_HEX_INDEX || !STUDENT_HEX_INDEX.geometryByHexKey) {
       return 0;
@@ -2472,6 +3005,7 @@
     var needUi = false;
     if (BOUNDARY_SANDBOX_PAINT.active) {
       if (!BOUNDARY_SANDBOX_PAINT.isDrag && BOUNDARY_SANDBOX_PAINT.clickKey) {
+        clearBoundarySandboxLassoRegionFill();
         var ck = BOUNDARY_SANDBOX_PAINT.clickKey;
         var w = !!BOUNDARY_SANDBOX.selectedHexKeys[ck];
         boundarySandboxSetHexSelected(ck, !w);
@@ -2504,6 +3038,11 @@
       if (raw && raw.length >= 3) {
         var closed = closeRingIfNeeded(raw);
         applyLassoToHexSelection(closed);
+        if (getBoundarySandboxHexMode() === "select") {
+          applySelectLassoToLassoRegionFootprint(closed);
+        } else {
+          applyEraseLassoToLassoRegionFootprint(closed);
+        }
       }
     }
     if (needUi) {
@@ -2615,6 +3154,7 @@
     }
     if (n === 0) {
       BOUNDARY_SANDBOX.selectionConfirmed = false;
+      BOUNDARY_SANDBOX.confirmedHexKeysSnapshot = Object.create(null);
     }
     el.textContent =
       n === 0
@@ -2624,6 +3164,9 @@
           : n + " hexes selected";
     syncSandboxConfirmEditButtonStates();
     updateSandboxStatsPanelSummary();
+    if (countSandboxHexKeys(BOUNDARY_SANDBOX.confirmedHexKeysSnapshot) === 0) {
+      updateBoundarySandboxSelectionOutline();
+    }
   }
 
   function resetBoundarySandboxFilterState() {
@@ -2861,7 +3404,10 @@
     }
   }
 
-  function aggregateBoundarySandboxSelectionFromIndex() {
+  /**
+   * @param {Object<string, boolean>|undefined} hexKeyBag Hex keys to aggregate (defaults to current map selection).
+   */
+  function aggregateBoundarySandboxSelectionFromIndex(hexKeyBag) {
     var out = {
       totalStudents: 0,
       byGrade: {},
@@ -2874,6 +3420,7 @@
     if (!STUDENT_HEX_INDEX || !STUDENT_HEX_INDEX.detailsByMsid) {
       return out;
     }
+    var keyBag = hexKeyBag || BOUNDARY_SANDBOX.selectedHexKeys;
     var byDet = STUDENT_HEX_INDEX.detailsByMsid;
     var fullByGrade = {};
     var fullByAT = Object.create(null);
@@ -2882,8 +3429,8 @@
         continue;
       }
       var hexMap0 = byDet[attMs0];
-      for (var hk0 in BOUNDARY_SANDBOX.selectedHexKeys) {
-        if (!BOUNDARY_SANDBOX.selectedHexKeys[hk0]) {
+      for (var hk0 in keyBag) {
+        if (!keyBag[hk0]) {
           continue;
         }
         var arr0 = hexMap0[hk0];
@@ -2914,8 +3461,8 @@
         continue;
       }
       var hexMap = byDet[attMs];
-      for (var hk in BOUNDARY_SANDBOX.selectedHexKeys) {
-        if (!BOUNDARY_SANDBOX.selectedHexKeys[hk]) {
+      for (var hk in keyBag) {
+        if (!keyBag[hk]) {
           continue;
         }
         var arr = hexMap[hk];
@@ -3193,26 +3740,19 @@
     if (!h || !lead) {
       return;
     }
-    if (!BOUNDARY_SANDBOX.selectionConfirmed) {
+    var statsKeys = getHexKeysForSandboxStatistics();
+    if (!statsKeys || countSandboxHexKeys(statsKeys) === 0) {
       h.textContent = "Students in selection";
       lead.innerHTML =
         "Choose hexes on the map (or a base school), then <strong>Confirm</strong> for grade, attendance, zoned, and demographics from the student hex layer.";
       clearSandboxStatsAndDemographicsDisplays();
       return;
     }
-    var nHex = 0;
-    for (var k0 in BOUNDARY_SANDBOX.selectedHexKeys) {
-      if (Object.prototype.hasOwnProperty.call(BOUNDARY_SANDBOX.selectedHexKeys, k0) && BOUNDARY_SANDBOX.selectedHexKeys[k0]) {
-        nHex++;
-      }
-    }
-    if (nHex === 0) {
-      h.textContent = "Students in selection";
-      lead.textContent = "No hexes in this selection.";
-      clearSandboxStatsAndDemographicsDisplays();
-      return;
-    }
-    var agg = aggregateBoundarySandboxSelectionFromIndex();
+    var nHex = countSandboxHexKeys(statsKeys);
+    var showPendingHint =
+      !BOUNDARY_SANDBOX.selectionConfirmed &&
+      countSandboxHexKeys(BOUNDARY_SANDBOX.confirmedHexKeysSnapshot) > 0;
+    var agg = aggregateBoundarySandboxSelectionFromIndex(statsKeys);
     var totalInHex = 0;
     if (agg.byGrade) {
       for (var kg in agg.byGrade) {
@@ -3224,11 +3764,22 @@
     h.textContent = "Students in selection (" + nHex + (nHex === 1 ? " hex" : " hexes") + ")";
     var inHexStr = totalInHex.toLocaleString();
     var inHexNoun = totalInHex === 1 ? "student" : "students";
-    lead.textContent =
-      inHexStr +
-      " " +
-      inHexNoun +
-      " live in the selected hex cells. Toggle grades or school types to exclude them from statistics below.";
+    if (showPendingHint) {
+      lead.innerHTML =
+        "<strong>Statistics below reflect your last confirmed selection.</strong> The map may show unsaved edits — click <strong>Confirm selection</strong> to refresh these figures. " +
+        inHexStr +
+        " " +
+        inHexNoun +
+        " " +
+        (totalInHex === 1 ? "lives" : "live") +
+        " in that confirmed hex set. Toggle grades or school types to exclude them from statistics below.";
+    } else {
+      lead.textContent =
+        inHexStr +
+        " " +
+        inHexNoun +
+        " live in the selected hex cells. Toggle grades or school types to exclude them from statistics below.";
+    }
     var atB = document.getElementById("sandbox-card-body-attendance-type");
     if (atB) {
       atB.innerHTML = formatSandboxAttendanceTypeBarHtml(agg.byAttendanceTypeFull || {});
@@ -3263,6 +3814,7 @@
   function prefillBoundarySandboxZonedHexesForBaseMsid(baseMsid) {
     BOUNDARY_SANDBOX.selectedHexKeys = Object.create(null);
     BOUNDARY_SANDBOX.selectionConfirmed = false;
+    BOUNDARY_SANDBOX.confirmedHexKeysSnapshot = Object.create(null);
     resetBoundarySandboxFilterState();
     if (baseMsid == null || isNaN(baseMsid)) {
       return;
@@ -3284,6 +3836,8 @@
         BOUNDARY_SANDBOX.selectedHexKeys[hk] = true;
       }
     }
+    syncSandboxLassoFootprintFromSelectedHexGeometries();
+    applyBoundarySandboxSelectionFeatureStates();
   }
 
   /** Invisible one-hex-per-feature layer; selection shown via feature-state. */
@@ -3332,6 +3886,20 @@
   function syncBoundarySandboxMapLayers() {
     if (!map || !map.getLayer("boundary-sandbox-hex-fill")) return;
     var vis = isBoundarySandboxViewActive() ? "visible" : "none";
+    if (map.getLayer("boundary-sandbox-lasso-region-fill")) {
+      try {
+        map.setLayoutProperty("boundary-sandbox-lasso-region-fill", "visibility", vis);
+      } catch (eLf) {
+        /* ignore */
+      }
+    }
+    if (map.getLayer("boundary-sandbox-lasso-region-outline")) {
+      try {
+        map.setLayoutProperty("boundary-sandbox-lasso-region-outline", "visibility", vis);
+      } catch (eLo) {
+        /* ignore */
+      }
+    }
     try {
       map.setLayoutProperty("boundary-sandbox-hex-fill", "visibility", vis);
     } catch (e) {
@@ -3344,8 +3912,16 @@
         /* ignore */
       }
     }
+    if (map.getLayer("boundary-sandbox-selection-outline-line")) {
+      try {
+        map.setLayoutProperty("boundary-sandbox-selection-outline-line", "visibility", vis);
+      } catch (eO) {
+        /* ignore */
+      }
+    }
     if (vis === "visible") {
       requestApplyBoundarySandboxSelectionOnIdle();
+      updateBoundarySandboxSelectionOutline();
     }
   }
 
@@ -3779,6 +4355,8 @@
     "schools-middle",
     "schools-high",
     "boundary-sandbox-hex-fill",
+    "boundary-sandbox-lasso-region-outline",
+    "boundary-sandbox-lasso-region-fill",
     "charter-student-hex-hit-fill",
     "student-hex-hit-fill",
     "school-parcels-elementary",
@@ -4376,11 +4954,18 @@
   /**
    * - Scenario: fill for `highlight`, `selectedAssignment`, or `scenarioRelevant` (feeder + middle), else 0.
    * - Existing: fill only for `highlight` (hover) or `selectedAssignment` (dropdown), else 0.
-   * - Boundary Sandbox: uniform fill so the map stays legible for hex work.
+   * - Boundary Sandbox: same as Existing (hover + selected assignment), not full-opacity on all zones.
    */
   function getAssignmentFillOpacityPaintValue() {
     if (isBoundarySandboxViewActive()) {
-      return BOUNDARY_FILL_OPACITY;
+      return [
+        "case",
+        ["==", ["feature-state", "highlight"], true],
+        BOUNDARY_FILL_OPACITY,
+        ["==", ["feature-state", "selectedAssignment"], true],
+        BOUNDARY_FILL_OPACITY,
+        0,
+      ];
     }
     if (isScenarioPlanningViewActive()) {
       return [
@@ -8503,6 +9088,7 @@
       var toolM = getBoundarySandboxSelectTool();
       e.preventDefault();
       if (toolM === "brush") {
+        clearBoundarySandboxLassoRegionFill();
         BOUNDARY_SANDBOX_PAINT.active = true;
         BOUNDARY_SANDBOX_PAINT.lastKey = null;
         BOUNDARY_SANDBOX_PAINT.isDrag = false;
@@ -10288,6 +10874,7 @@
         var raw = sb.value;
         var ms = raw !== "" && raw != null ? Number(raw) : null;
         if (raw !== "" && raw != null && !isNaN(ms)) {
+          clearBoundarySandboxLassoRegionFill();
           prefillBoundarySandboxZonedHexesForBaseMsid(ms);
           requestApplyBoundarySandboxSelectionOnIdle();
         }
@@ -10309,8 +10896,10 @@
       if (cbtn.getAttribute("aria-disabled") === "true") {
         return;
       }
+      BOUNDARY_SANDBOX.confirmedHexKeysSnapshot = shallowCopyHexKeyBag(BOUNDARY_SANDBOX.selectedHexKeys);
       BOUNDARY_SANDBOX.selectionConfirmed = true;
       updateSandboxSelectedHexCountUi();
+      updateBoundarySandboxSelectionOutline();
     });
   })();
 
