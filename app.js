@@ -23,6 +23,8 @@
     travelImpact: "data/processed/travel_impact.json",
     /** Network isochrones (1–10 mi by school); "Name" encodes MSID and ToBreak in feet. */
     schoolIsochrones: "geo/SchoolIsochrones.geojson",
+    /** On-site BPS employee counts by MSID (see scripts/export_bps_employee_count_from_xlsx.py). */
+    bpsEmployeeCount: "data/processed/bps_employee_count_by_msid.json",
   };
 
   var FEET_PER_MILE = 5280;
@@ -138,6 +140,27 @@
     return MASTER_BY_MSID[String(msid)] || null;
   }
 
+  /** Formatted count from data/processed/bps_employee_count_by_msid.json, or "—". */
+  function bpsOnSiteEmployeeCountDisplay(msid) {
+    if (msid == null || isNaN(Number(msid)) || !BPS_EMPLOYEE_COUNT_BY_MSID) {
+      return "—";
+    }
+    var map = BPS_EMPLOYEE_COUNT_BY_MSID;
+    var n = Number(msid);
+    var keys = [String(n), String(n).padStart(4, "0")];
+    var raw = null;
+    for (var ki = 0; ki < keys.length; ki++) {
+      if (Object.prototype.hasOwnProperty.call(map, keys[ki])) {
+        raw = map[keys[ki]];
+        break;
+      }
+    }
+    if (raw == null || raw === "") return "—";
+    var num = Number(raw);
+    if (isNaN(num)) return "—";
+    return num.toLocaleString();
+  }
+
   function schoolLevelToTypeString(level) {
     var lv = String(level || "").toLowerCase();
     if (lv === "elementary") return "ELEMENTARY";
@@ -207,6 +230,8 @@
   var MASTER_BY_MSID = null;
   /** From data/processed/ese_feeder_matrix.json; null if missing or failed to load. */
   var ESE_FEEDER_MATRIX = null;
+  /** From data/processed/bps_employee_count_by_msid.json; null if missing or failed to load. */
+  var BPS_EMPLOYEE_COUNT_BY_MSID = null;
   /** SCHOOLS_ID keys for `SchAB_Type === "CHOICE"` from SchoolLocations (capture KPI + CSV download). */
   var CHOICE_SCHOOL_MSIDS = null;
   /** SCHOOLS_ID keys for charter schools (TYPE/SchAB_Type CHARTER on boundary + charter location layers). */
@@ -2155,6 +2180,13 @@
         .catch(function () {
           return { type: "FeatureCollection", features: [] };
         }),
+      fetch(DATA.bpsEmployeeCount)
+        .then(function (r) {
+          return r.ok ? r.json() : null;
+        })
+        .catch(function () {
+          return null;
+        }),
     ])
       .then(function (results) {
         MASTER_BY_MSID = parseSchoolMasterCsv(results[4] || "");
@@ -2163,6 +2195,8 @@
         MEADOWLANE_CAPTURE_OVERRIDE = results[10];
         ESE_FEEDER_MATRIX = results[12] || null;
         TRAVEL_IMPACT_ALL = results[13] || null;
+        BPS_EMPLOYEE_COUNT_BY_MSID =
+          results[15] && results[15].byMsid ? results[15].byMsid : null;
         MIDDLE_SCHOOL_MSID_SET = buildMiddleSchoolMsidSetFromSchoolsFc(
           enrichSchoolsFcWithMasterType(results[3])
         );
@@ -2307,6 +2341,56 @@
           row[capIdxs[ci]] = na;
         }
       }
+    }
+    return grid;
+  }
+
+  /** Appends or fills `bps_employee_count` from BPS_EMPLOYEE_COUNT_BY_MSID (MSID in column 0). */
+  function applyBpsEmployeeCountToCsvGrid(grid) {
+    if (!grid || grid.length < 2) return grid;
+    var colName = "bps_employee_count";
+    var headers = grid[0].map(function (h) {
+      return String(h).trim();
+    });
+    var existingIdx = headers.indexOf(colName);
+    var msidCol = 0;
+
+    function lookupCount(msidNum) {
+      if (!BPS_EMPLOYEE_COUNT_BY_MSID || msidNum == null || isNaN(msidNum)) {
+        return "";
+      }
+      var map = BPS_EMPLOYEE_COUNT_BY_MSID;
+      var k = String(Number(msidNum));
+      var v =
+        map[k] != null
+          ? map[k]
+          : map[String(Number(msidNum)).padStart(4, "0")];
+      if (v == null || v === "") return "";
+      return String(v);
+    }
+
+    if (existingIdx >= 0) {
+      for (var r = 1; r < grid.length; r++) {
+        var row = grid[r];
+        if (!row) continue;
+        var idNum = parseInt(
+          String(row[msidCol] != null ? row[msidCol] : "").trim(),
+          10
+        );
+        row[existingIdx] = lookupCount(idNum);
+      }
+      return grid;
+    }
+
+    grid[0] = grid[0].concat([colName]);
+    for (var r2 = 1; r2 < grid.length; r2++) {
+      var row2 = grid[r2];
+      if (!row2) continue;
+      var idNum2 = parseInt(
+        String(row2[msidCol] != null ? row2[msidCol] : "").trim(),
+        10
+      );
+      grid[r2] = row2.concat([lookupCount(idNum2)]);
     }
     return grid;
   }
@@ -7749,7 +7833,7 @@
     var p2 = document.getElementById("scenario-details-secondary");
     if (p2) {
       p2.textContent =
-        "Opened: 19XX | Age of Site: XX | Year of Last Major Renovation: — | Size of Site (Acres): XX";
+        "Year Opened | Age of Site | Year of Last Major Renovation | Size of Site (Acres) | Count of On-Site BPS Employees";
       p2.classList.add("school-details-placeholder");
       p2.removeAttribute("title");
     }
@@ -7959,6 +8043,7 @@
         renovation = String(m.last_major_renovation_year).trim();
         if (renovation === "No Major Renovation") renovation = "N/A";
       }
+      var bpsEmployees = bpsOnSiteEmployeeCountDisplay(msid);
       elS.textContent =
         "Opened: " +
         opened +
@@ -7967,10 +8052,11 @@
         " | Year of Last Major Renovation: " +
         renovation +
         " | Size of Site (Acres): " +
-        acres;
+        acres +
+        " | Count of On-Site BPS Employees: " +
+        bpsEmployees;
       elS.classList.remove("school-details-placeholder");
-      elS.title =
-        "Year opened, age as of 2026, last major renovation year (from district facility data merged into school_master.csv), and site size (acres).";
+      elS.removeAttribute("title");
     }
   }
 
@@ -8238,7 +8324,7 @@
       if (parts.capacityStr !== "—") {
         capEl.textContent = parts.capacityStr;
         capEl.classList.remove("kpi-value--placeholder");
-        capEl.title = "2025-26 factored capacity from data/school_master.csv.";
+        capEl.title = "Includes capacity from portables.";
       } else {
         capEl.textContent = "—";
         capEl.classList.add("kpi-value--placeholder");
@@ -8264,7 +8350,7 @@
       if (parts.utilizationStr !== "—") {
         utilEl.textContent = parts.utilizationStr;
         utilEl.classList.remove("kpi-value--placeholder");
-        utilEl.title = "2025-26 utilization (decimal in CSV, shown as percent).";
+        utilEl.title = "'25-26 Enrollment by Factored Capacity";
       } else {
         utilEl.textContent = "—";
         utilEl.classList.add("kpi-value--placeholder");
@@ -8351,8 +8437,9 @@
     }
     if (elS) {
       elS.textContent =
-        "Opened: 19XX | Age of Site: XX | Year of Last Major Renovation: — | Size of Site (Acres): XX";
+        "Year Opened | Age of Site | Year of Last Major Renovation | Size of Site (Acres) | Count of On-Site BPS Employees";
       elS.classList.add("school-details-placeholder");
+      elS.removeAttribute("title");
     }
     var capAsgLbl = document.getElementById("kpi-capture-assigned-label");
     if (capAsgLbl) {
@@ -10982,6 +11069,7 @@
           var grid = parseCsvRows(text);
           grid = filterCsvGridToDropdownSchools(grid);
           grid = applyChoiceSchoolCaptureToCsvGrid(grid);
+          grid = applyBpsEmployeeCountToCsvGrid(grid);
           var out = grid.map(joinCsvQuotedRow).join("\r\n");
           var blob = new Blob([out], { type: "text/csv;charset=utf-8" });
           var url = URL.createObjectURL(blob);
