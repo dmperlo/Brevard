@@ -15,6 +15,9 @@
     schoolBoardDistricts: "geo/SchoolBoardDistricts.geojson",
     municipalBoundaries: "geo/MunicipalBoundaries.geojson",
     charterSchoolLocations: "geo/CharterSchoolLocations.geojson",
+    privateSchoolLocations: "geo/PrivateSchools.json",
+    /** Homeschool students joined to hex grid (GRID_ID); one polygon row per student in source export. */
+    homeschoolStudentHexagons: "geo/HomeschoolStudentHexagons.geojson",
     /** Meadowlane Primary/Intermediate grade-band capture overrides (see notes inside file). */
     meadowlaneCaptureOverride: "data/processed/meadowlane_capture_override.json",
     /** K-12 ESE feeder matrix (columns = program destinations per school row). */
@@ -265,6 +268,26 @@
    * (attendance MSID 6500–6699).
    */
   var STUDENT_HEX_INDEX = null;
+  /** Per-hex homeschool student counts (`studentHexKey` → count), from homeschool GeoJSON. */
+  var HOMESCHOOL_HEX_COUNTS = null;
+  /**
+   * Hex geometries from homeschool export for IDs missing from `STUDENT_HEX_INDEX.geometryByHexKey`
+   * (bundle-first resolution in `homeschoolHexGeometry`).
+   */
+  var HOMESCHOOL_HEX_GEOMETRY_FALLBACK = null;
+  /**
+   * Per-hex arrays of sandbox detail rows for homeschool students (`studentHexKey` → rows).
+   * Built from homeschool GeoJSON when layers refresh.
+   */
+  var HOMESCHOOL_DETAILS_BY_HEX_KEY = null;
+  /** Canonical attendance MSID for homeschool (district lookup / exports). */
+  var HOMESCHOOL_ATTENDANCE_MSID = 9998;
+  /** Lazily filled: assignment MSID string → homeschool student count in that polygon (centroid-in-boundary). */
+  var homeschoolInBoundaryByMsidCache = Object.create(null);
+
+  function clearHomeschoolInBoundaryCountCache() {
+    homeschoolInBoundaryByMsidCache = Object.create(null);
+  }
   /**
    * All student residence rows (any MSID): per-hex grade tallies + hex centroids
    * for travel-shed tooltips (centroid-in-isochrone, districtwide).
@@ -341,10 +364,12 @@
     var row = document.getElementById("student-hex-tooltip-row");
     var main = document.getElementById("toggle-student-hex");
     var ch = document.getElementById("toggle-charter-student-hex");
+    var hm = document.getElementById("toggle-homeschool-student-hex");
     var tt = document.getElementById("toggle-student-hex-density-tooltip");
     var modeWrap = document.getElementById("student-hex-residence-modes");
     if (!row) return;
-    var anyDensityOn = (!!main && main.checked) || (!!ch && ch.checked);
+    var anyDensityOn =
+      (!!main && main.checked) || (!!ch && ch.checked) || (!!hm && hm.checked);
     row.hidden = !anyDensityOn;
     if (tt) {
       tt.disabled = !anyDensityOn;
@@ -362,10 +387,13 @@
   function getMapDensityLegendVisibility() {
     var stuInp = document.getElementById("toggle-student-hex");
     var chInp = document.getElementById("toggle-charter-student-hex");
+    var hmInp = document.getElementById("toggle-homeschool-student-hex");
     var stuOn = !!(stuInp && stuInp.checked);
     var chOn = !!(chInp && chInp.checked);
+    var hmOn = !!(hmInp && hmInp.checked);
     var stuVis = stuOn;
     var chVis = chOn;
+    var hmVis = hmOn;
     if (map && map.getLayer) {
       try {
         if (map.getLayer("student-hex-heatmap")) {
@@ -383,8 +411,16 @@
       } catch (e1) {
         /* ignore */
       }
+      try {
+        if (map.getLayer("homeschool-student-hex-heatmap")) {
+          hmVis =
+            hmOn && map.getLayoutProperty("homeschool-student-hex-heatmap", "visibility") === "visible";
+        }
+      } catch (e2) {
+        /* ignore */
+      }
     }
-    return { stu: stuVis, ch: chVis };
+    return { stu: stuVis, ch: chVis, hm: hmVis };
   }
 
   function formatMapLegendStudentsPerSqMi(n) {
@@ -531,6 +567,70 @@
     return { min: minC, max: maxC };
   }
 
+  function minMaxNeighborhoodHomeschoolDensitiesInViewForLegend() {
+    if (!map || !map.getSource || !map.getSource("homeschool-student-hex")) {
+      return { min: null, max: null };
+    }
+    var b;
+    try {
+      b = map.getBounds();
+    } catch (e) {
+      return { min: null, max: null };
+    }
+    if (!b) {
+      return { min: null, max: null };
+    }
+    var features;
+    try {
+      features = map.querySourceFeatures("homeschool-student-hex", {});
+    } catch (e2) {
+      return { min: null, max: null };
+    }
+    if (!features || !features.length) {
+      return { min: null, max: null };
+    }
+    var preHm = HOMESCHOOL_HEX_COUNTS || Object.create(null);
+    var minC = null;
+    var maxC = null;
+    for (var j = 0; j < features.length; j++) {
+      var f2 = features[j];
+      if (!f2 || !f2.properties) continue;
+      var g2 = f2.geometry;
+      if (!g2 || g2.type !== "Point" || !g2.coordinates) continue;
+      var lng2 = g2.coordinates[0];
+      var lat2 = g2.coordinates[1];
+      if (lng2 == null || lat2 == null) continue;
+      var ll2;
+      try {
+        ll2 = new mapboxgl.LngLat(lng2, lat2);
+      } catch (e3b) {
+        continue;
+      }
+      if (!b.contains(ll2)) {
+        continue;
+      }
+      var c2 = null;
+      var hk2 = f2.properties._hexKey != null ? String(f2.properties._hexKey) : null;
+      if (hk2) {
+        c2 = neighborhoodAverageHomeschoolResidenceStudentsPerSqMi(hk2, preHm);
+      }
+      if (c2 == null || !isFinite(c2)) {
+        if (f2.properties.students_per_sq_mi == null) {
+          continue;
+        }
+        c2 = Number(f2.properties.students_per_sq_mi);
+        if (!isFinite(c2)) continue;
+      }
+      if (minC == null || c2 < minC) {
+        minC = c2;
+      }
+      if (maxC == null || c2 > maxC) {
+        maxC = c2;
+      }
+    }
+    return { min: minC, max: maxC };
+  }
+
   function scheduleRefreshMapDensityLegendValueRanges() {
     if (mapDensityLegendValueRefreshHandle) {
       clearTimeout(mapDensityLegendValueRefreshHandle);
@@ -546,7 +646,9 @@
     var stuMax = document.getElementById("map-density-legend-student-max");
     var chMin = document.getElementById("map-density-legend-charter-min");
     var chMax = document.getElementById("map-density-legend-charter-max");
-    if (!stuMin && !chMin) {
+    var hmMin = document.getElementById("map-density-legend-homeschool-min");
+    var hmMax = document.getElementById("map-density-legend-homeschool-max");
+    if (!stuMin && !chMin && !hmMin) {
       return;
     }
     var v = getMapDensityLegendVisibility();
@@ -586,6 +688,24 @@
       if (chMin) chMin.textContent = "—";
       if (chMax) chMax.textContent = "—";
     }
+    if (v.hm && hmMin && hmMax) {
+      var r3 = minMaxNeighborhoodHomeschoolDensitiesInViewForLegend();
+      hmMin.textContent = formatMapLegendStudentsPerSqMi(r3.min);
+      hmMax.textContent = formatMapLegendStudentsPerSqMi(r3.max);
+      var bar3 = document.getElementById("map-density-legend-homeschool-scale");
+      if (bar3) {
+        bar3.setAttribute(
+          "aria-label",
+          "Color scale: homeschool student residences; in current view, neighborhood-mean students per square mile, minimum " +
+            (r3.min == null ? "—" : formatMapLegendStudentsPerSqMi(r3.min)) +
+            " to maximum " +
+            (r3.max == null ? "—" : formatMapLegendStudentsPerSqMi(r3.max))
+        );
+      }
+    } else {
+      if (hmMin) hmMin.textContent = "—";
+      if (hmMax) hmMax.textContent = "—";
+    }
   }
 
   function setupMapDensityLegendViewListeners() {
@@ -594,6 +714,7 @@
     }
     mapDensityLegendViewListenersSet = true;
     function onView() {
+      syncResidenceDensityHeatmapZoomVisibility();
       scheduleRefreshMapDensityLegendValueRanges();
     }
     map.on("moveend", onView);
@@ -613,13 +734,17 @@
     var v = getMapDensityLegendVisibility();
     var rowStu = document.getElementById("map-density-legend-student");
     var rowCh = document.getElementById("map-density-legend-charter");
+    var rowHm = document.getElementById("map-density-legend-homeschool");
     if (rowStu) {
       rowStu.hidden = !v.stu;
     }
     if (rowCh) {
       rowCh.hidden = !v.ch;
     }
-    leg.hidden = !v.stu && !v.ch;
+    if (rowHm) {
+      rowHm.hidden = !v.hm;
+    }
+    leg.hidden = !v.stu && !v.ch && !v.hm;
     scheduleRefreshMapDensityLegendValueRanges();
   }
 
@@ -634,6 +759,8 @@
     /** 7–12 / Jr–Sr schools (distinct from 9–12 high on map and Sankey). */
     jrSr: { fill: "#ea580c", line: "#c2410c", highlightStroke: "#fb923c" },
     charter: { fill: "#ec4899", line: "#be185d", highlightStroke: "#fbcfe8" },
+    /** Private schools (non-BPS): golden yellow dot / hover ring. */
+    privateSchool: { fill: "#eab308", line: "#ca8a04", highlightStroke: "#fde047" },
   };
   var schoolMapCircleStrokeColorDefault = "#ffffff";
 
@@ -945,6 +1072,65 @@
     1,
     "rgba(255, 64, 255, 0.94)",
   ];
+  /** Same structure as charter ramp; red/orange family for homeschool residential density. */
+  var HEAT_HOMESCHOOL_RAMP_SCHOOL = [
+    "interpolate",
+    ["linear"],
+    HEAT_SCHOOL_DENSITY,
+    0,
+    "rgba(255, 255, 255, 0)",
+    0.04,
+    "rgba(254, 226, 226, 0.14)",
+    0.1,
+    "rgba(252, 165, 165, 0.26)",
+    0.18,
+    "rgba(248, 113, 113, 0.38)",
+    0.27,
+    "rgba(239, 68, 68, 0.48)",
+    0.37,
+    "rgba(220, 38, 38, 0.58)",
+    0.48,
+    "rgba(185, 28, 28, 0.68)",
+    0.6,
+    "rgba(153, 27, 27, 0.78)",
+    0.72,
+    "rgba(153, 27, 27, 0.78)",
+    0.88,
+    "rgba(127, 29, 29, 0.86)",
+    0.95,
+    "rgba(91, 17, 17, 0.9)",
+    1,
+    "rgba(69, 10, 10, 0.94)",
+  ];
+  var HEAT_HOMESCHOOL_RAMP_UNIFORM = [
+    "interpolate",
+    ["linear"],
+    ["heatmap-density"],
+    0,
+    "rgba(255, 255, 255, 0)",
+    0.2349,
+    "rgba(254, 226, 226, 0.14)",
+    0.3548,
+    "rgba(252, 165, 165, 0.26)",
+    0.4622,
+    "rgba(248, 113, 113, 0.38)",
+    0.5548,
+    "rgba(239, 68, 68, 0.48)",
+    0.6393,
+    "rgba(220, 38, 38, 0.58)",
+    0.7187,
+    "rgba(185, 28, 28, 0.68)",
+    0.7946,
+    "rgba(153, 27, 27, 0.78)",
+    0.8626,
+    "rgba(153, 27, 27, 0.78)",
+    0.9441,
+    "rgba(127, 29, 29, 0.86)",
+    0.9772,
+    "rgba(91, 17, 17, 0.9)",
+    1,
+    "rgba(69, 10, 10, 0.94)",
+  ];
 
   /** Default zoom–scaled heat for student + charter residence heatmaps; restored when leaving school context. */
   var HEAT_RESIDENCE_INTENSITY = [
@@ -964,6 +1150,80 @@
     17,
     0.3,
   ];
+
+  /**
+   * Hide student / charter residence-density heatmaps (and density hover tooltips) at neighborhood scale
+   * and closer. Higher zoom level number = more zoomed in; this threshold is one step further zoomed out than z14.
+   * Hex hit-fill layers stay visible for hover tooltips on the map (without density popup when zoomed in).
+   */
+  var RESIDENCE_HEATMAP_HIDE_ZOOM = 13;
+
+  function residenceDensityHeatmapHiddenAtCurrentZoom() {
+    if (!map || typeof map.getZoom !== "function") {
+      return false;
+    }
+    try {
+      return map.getZoom() >= RESIDENCE_HEATMAP_HIDE_ZOOM;
+    } catch (eZ) {
+      return false;
+    }
+  }
+
+  /**
+   * Match heatmap visibility to hit-fill visibility, except heatmaps are hidden when zoomed in past
+   * `RESIDENCE_HEATMAP_HIDE_ZOOM`.
+   */
+  function syncResidenceDensityHeatmapZoomVisibility() {
+    if (!map || !map.getLayer) {
+      return;
+    }
+    var hideHeat = residenceDensityHeatmapHiddenAtCurrentZoom();
+    var stuHitOk = false;
+    var chHitOk = false;
+    var hmHitOk = false;
+    try {
+      if (map.getLayer("student-hex-hit-fill")) {
+        stuHitOk = map.getLayoutProperty("student-hex-hit-fill", "visibility") === "visible";
+      }
+    } catch (e0) {
+      /* ignore */
+    }
+    try {
+      if (map.getLayer("charter-student-hex-hit-fill")) {
+        chHitOk = map.getLayoutProperty("charter-student-hex-hit-fill", "visibility") === "visible";
+      }
+    } catch (e1) {
+      /* ignore */
+    }
+    try {
+      if (map.getLayer("homeschool-student-hex-hit-fill")) {
+        hmHitOk =
+          map.getLayoutProperty("homeschool-student-hex-hit-fill", "visibility") === "visible";
+      }
+    } catch (e1b) {
+      /* ignore */
+    }
+    var stuHm = stuHitOk && !hideHeat ? "visible" : "none";
+    var chHm = chHitOk && !hideHeat ? "visible" : "none";
+    var hmHm = hmHitOk && !hideHeat ? "visible" : "none";
+    try {
+      if (map.getLayer("student-hex-heatmap")) {
+        map.setLayoutProperty("student-hex-heatmap", "visibility", stuHm);
+      }
+      if (map.getLayer("charter-student-hex-heatmap")) {
+        map.setLayoutProperty("charter-student-hex-heatmap", "visibility", chHm);
+      }
+      if (map.getLayer("homeschool-student-hex-heatmap")) {
+        map.setLayoutProperty("homeschool-student-hex-heatmap", "visibility", hmHm);
+      }
+    } catch (eL) {
+      /* ignore */
+    }
+    if (hideHeat && typeof dismissStudentHexDensityTooltip === "function") {
+      dismissStudentHexDensityTooltip();
+    }
+    syncMapDensityLegend();
+  }
 
   function applyResidenceHeatmapSymbology() {
     if (!map || !map.getLayer) {
@@ -991,6 +1251,14 @@
         );
         map.setPaintProperty("charter-student-hex-heatmap", "heatmap-intensity", intExpr);
       }
+      if (map.getLayer("homeschool-student-hex-heatmap")) {
+        map.setPaintProperty(
+          "homeschool-student-hex-heatmap",
+          "heatmap-color",
+          useOriginalRamp ? HEAT_HOMESCHOOL_RAMP_SCHOOL : HEAT_HOMESCHOOL_RAMP_UNIFORM
+        );
+        map.setPaintProperty("homeschool-student-hex-heatmap", "heatmap-intensity", intExpr);
+      }
     } catch (eHmap) {
       /* ignore */
     }
@@ -1012,6 +1280,8 @@
     var schoolBoardFc = results[8];
     var charterFc = results[9];
     var municipalFc = results[11];
+    var privateFc = filterZeroEnrollmentPrivateSchoolsFc(results[16]);
+    var homeschoolFc = results[17];
     CHARTER_SCHOOL_MSIDS = buildCharterSchoolMsidSet(schools, charterFc);
 
     if (studentHexFc && studentHexFc.features && studentHexFc.features.length) {
@@ -1021,6 +1291,16 @@
       STUDENT_HEX_INDEX = null;
       TRAVEL_SHED_RESIDENCE_INDEX = null;
     }
+    HOMESCHOOL_HEX_COUNTS = buildHomeschoolHexCounts(
+      homeschoolFc && homeschoolFc.features ? homeschoolFc : null
+    );
+    HOMESCHOOL_HEX_GEOMETRY_FALLBACK = buildHomeschoolHexGeometryFallback(
+      homeschoolFc && homeschoolFc.features ? homeschoolFc : null
+    );
+    HOMESCHOOL_DETAILS_BY_HEX_KEY = buildHomeschoolDetailsByHexKey(
+      homeschoolFc && homeschoolFc.features ? homeschoolFc : null
+    );
+    clearHomeschoolInBoundaryCountCache();
 
     GEO_CACHE.es = es;
     GEO_CACHE.ms = ms;
@@ -1043,6 +1323,11 @@
     map.getSource("charter-schools").setData(
       charterFc || { type: "FeatureCollection", features: [] }
     );
+    if (map.getSource("private-schools")) {
+      map.getSource("private-schools").setData(
+        privateFc || { type: "FeatureCollection", features: [] }
+      );
+    }
     SCHOOL_ISOCHRONES_ENRICHED = buildSchoolIsochronesEnriched(
       results[14] || { type: "FeatureCollection", features: [] }
     );
@@ -1076,6 +1361,18 @@
         features: [],
       });
     }
+    if (map.getSource("homeschool-student-hex")) {
+      map.getSource("homeschool-student-hex").setData({
+        type: "FeatureCollection",
+        features: [],
+      });
+    }
+    if (map.getSource("homeschool-student-hex-hit")) {
+      map.getSource("homeschool-student-hex-hit").setData({
+        type: "FeatureCollection",
+        features: [],
+      });
+    }
 
     map.resize();
     var combined = null;
@@ -1085,6 +1382,7 @@
     combined = mergeBbox(combined, computeBbox(schools));
     combined = mergeBbox(combined, computeBbox(schoolParcelsFc));
     combined = mergeBbox(combined, computeBbox(charterFc));
+    combined = mergeBbox(combined, computeBbox(privateFc));
     if (fitBounds && combined) {
       map.fitBounds(combined, { padding: 48, maxZoom: 12, duration: 0 });
     }
@@ -1330,6 +1628,8 @@
     var schoolBoardFc = results[8];
     var charterFc = results[9];
     var municipalFc = results[11];
+    var privateFc = filterZeroEnrollmentPrivateSchoolsFc(results[16]);
+    var homeschoolFc = results[17];
     CHARTER_SCHOOL_MSIDS = buildCharterSchoolMsidSet(schools, charterFc);
     SCHOOL_ISOCHRONES_ENRICHED = buildSchoolIsochronesEnriched(
       results[14] || { type: "FeatureCollection", features: [] }
@@ -1764,6 +2064,63 @@
           layout: { visibility: "none" },
         });
 
+        map.addSource("homeschool-student-hex", {
+          type: "geojson",
+          data: { type: "FeatureCollection", features: [] },
+        });
+        map.addLayer({
+          id: "homeschool-student-hex-heatmap",
+          type: "heatmap",
+          source: "homeschool-student-hex",
+          paint: {
+            "heatmap-weight": [
+              "max",
+              0,
+              [
+                "sqrt",
+                [
+                  "max",
+                  0,
+                  ["to-number", ["get", "count"]],
+                ],
+              ],
+            ],
+            "heatmap-intensity": HEAT_RESIDENCE_INTENSITY,
+            "heatmap-radius": [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              8,
+              16,
+              11,
+              30,
+              14,
+              42,
+              16,
+              32,
+              17,
+              28,
+            ],
+            "heatmap-opacity": 0.88,
+            "heatmap-color": HEAT_HOMESCHOOL_RAMP_UNIFORM,
+          },
+          layout: { visibility: "none" },
+        });
+        map.addSource("homeschool-student-hex-hit", {
+          type: "geojson",
+          data: { type: "FeatureCollection", features: [] },
+        });
+        map.addLayer({
+          id: "homeschool-student-hex-hit-fill",
+          type: "fill",
+          source: "homeschool-student-hex-hit",
+          paint: {
+            "fill-opacity": 0,
+            "fill-color": "#000000",
+          },
+          layout: { visibility: "none" },
+        });
+
         map.addSource("boundary-sandbox-lasso-region-fill", {
           type: "geojson",
           data: { type: "FeatureCollection", features: [] },
@@ -1978,12 +2335,33 @@
             ],
           }),
         });
-
-        ["schools-elementary", "schools-middle", "schools-high", "schools-charter"].forEach(function (lid) {
-          if (map.getLayer(lid)) {
-            map.moveLayer(lid);
-          }
+        map.addSource("private-schools", {
+          type: "geojson",
+          data: privateFc || { type: "FeatureCollection", features: [] },
+          promoteId: "FID",
         });
+        map.addLayer({
+          id: "schools-private",
+          type: "circle",
+          source: "private-schools",
+          paint: Object.assign({}, schoolMapCircleBasePaint, {
+            "circle-color": PALETTE.privateSchool.fill,
+            "circle-stroke-color": [
+              "case",
+              schoolMapHighlightStateAny,
+              PALETTE.privateSchool.highlightStroke,
+              schoolMapCircleStrokeColorDefault,
+            ],
+          }),
+        });
+
+        ["schools-elementary", "schools-middle", "schools-high", "schools-charter", "schools-private"].forEach(
+          function (lid) {
+            if (map.getLayer(lid)) {
+              map.moveLayer(lid);
+            }
+          }
+        );
 
         /**
          * Default stack draws municipal hover under HS/MS/ES fills — the stroke is invisible. Place it above
@@ -2004,6 +2382,7 @@
         combined = mergeBbox(combined, computeBbox(schools));
         combined = mergeBbox(combined, computeBbox(schoolParcelsFc));
         combined = mergeBbox(combined, computeBbox(charterFc));
+        combined = mergeBbox(combined, computeBbox(privateFc));
 
         map.resize();
         if (fitBounds && combined) {
@@ -2025,6 +2404,16 @@
           STUDENT_HEX_INDEX = null;
           TRAVEL_SHED_RESIDENCE_INDEX = null;
         }
+        HOMESCHOOL_HEX_COUNTS = buildHomeschoolHexCounts(
+          homeschoolFc && homeschoolFc.features ? homeschoolFc : null
+        );
+        HOMESCHOOL_HEX_GEOMETRY_FALLBACK = buildHomeschoolHexGeometryFallback(
+          homeschoolFc && homeschoolFc.features ? homeschoolFc : null
+        );
+        HOMESCHOOL_DETAILS_BY_HEX_KEY = buildHomeschoolDetailsByHexKey(
+          homeschoolFc && homeschoolFc.features ? homeschoolFc : null
+        );
+        clearHomeschoolInBoundaryCountCache();
 
         if (!mapLayersInitialized) {
           mapLayersInitialized = true;
@@ -2186,6 +2575,20 @@
         })
         .catch(function () {
           return null;
+        }),
+      fetch(DATA.privateSchoolLocations)
+        .then(function (r) {
+          return r.ok ? r.json() : { type: "FeatureCollection", features: [] };
+        })
+        .catch(function () {
+          return { type: "FeatureCollection", features: [] };
+        }),
+      fetch(DATA.homeschoolStudentHexagons)
+        .then(function (r) {
+          return r.ok ? r.json() : { type: "FeatureCollection", features: [] };
+        })
+        .catch(function () {
+          return { type: "FeatureCollection", features: [] };
         }),
     ])
       .then(function (results) {
@@ -2592,14 +2995,13 @@
       syncBoundarySandboxLassoRegionSourcesFromAccumulator();
       return;
     }
-    var gk = STUDENT_HEX_INDEX.geometryByHexKey;
     var bag = BOUNDARY_SANDBOX.selectedHexKeys;
     var feats = [];
     for (var sk in bag) {
       if (!Object.prototype.hasOwnProperty.call(bag, sk) || !bag[sk]) {
         continue;
       }
-      var g = gk[sk];
+      var g = homeschoolHexGeometry(sk);
       if (!g) {
         continue;
       }
@@ -2660,7 +3062,7 @@
       if (!Object.prototype.hasOwnProperty.call(snap, ks) || !snap[ks]) {
         continue;
       }
-      var g = gk[ks];
+      var g = homeschoolHexGeometry(ks);
       if (!g) {
         continue;
       }
@@ -3168,12 +3570,11 @@
       resetBoundarySandboxFilterState();
       return;
     }
-    var gk = STUDENT_HEX_INDEX.geometryByHexKey;
     for (var ks in BOUNDARY_SANDBOX.selectedHexKeys) {
       if (!Object.prototype.hasOwnProperty.call(BOUNDARY_SANDBOX.selectedHexKeys, ks)) {
         continue;
       }
-      if (!gk[ks]) {
+      if (!homeschoolHexGeometry(ks)) {
         delete BOUNDARY_SANDBOX.selectedHexKeys[ks];
       }
     }
@@ -3279,11 +3680,27 @@
     }
   }
 
+  /**
+   * Grade bucket key for boundary sandbox charts/toggles. Homeschool export uses grade code 13 for “no grade”.
+   */
+  function sandboxGradeCanonicalForDetail(d) {
+    if (d && d.__homeschool) {
+      var tr = String(d.Grade != null ? d.Grade : "").trim();
+      if (tr !== "") {
+        var n13 = parseInt(tr.replace(/^0+/, "") || tr, 10);
+        if (!isNaN(n13) && n13 === 13) {
+          return "__NOGRADE__";
+        }
+      }
+    }
+    return canonicalStudentGradeCode(d.Grade) || "__UNK__";
+  }
+
   function detailIncludedBySandboxGradeToggle(d) {
     if (!d) {
       return true;
     }
-    var gC = canonicalStudentGradeCode(d.Grade) || "__UNK__";
+    var gC = sandboxGradeCanonicalForDetail(d);
     var t = BOUNDARY_SANDBOX.gradeToggles;
     if (t && t[gC] === false) {
       return false;
@@ -3310,6 +3727,9 @@
   function sandboxAttendanceCategoryForDetail(d) {
     if (!d) {
       return "otherTraditional";
+    }
+    if (d.__homeschool) {
+      return "homeschool";
     }
     var att = parseInt(String(d.MSID != null ? d.MSID : "").trim(), 10);
     if (isNaN(att) || att <= 0) {
@@ -3348,6 +3768,7 @@
       "otherTraditional",
       "charter",
       "choice",
+      "homeschool",
     ];
     for (var i = 0; i < allKeys.length; i++) {
       var gk = allKeys[i];
@@ -3372,13 +3793,16 @@
    * Renders the same control layout as the grade bar chart, with a checkbox per type and colored bars
    * when included (dimmed + `is-excluded` when unchecked, same as grade).
    * @param {Object<string, number>|undefined} byType unfiltered row counts in the full hex set
+   * @param {number|undefined} selectionTotalAll students in hex selection (ignores checkboxes); footer total line
+   * @param {number|undefined} includedInDetails cohort passing grade + attendance toggles (lists / demographics)
    */
-  function formatSandboxAttendanceTypeBarHtml(byType) {
+  function formatSandboxAttendanceTypeBarHtml(byType, selectionTotalAll, includedInDetails) {
     var defRows = [
       { key: "zonedTraditional", label: "Zoned Traditional School", mod: "zoned" },
       { key: "otherTraditional", label: "Other Traditional School", mod: "other" },
       { key: "charter", label: "Charter School", mod: "charter" },
       { key: "choice", label: "Choice School", mod: "choice" },
+      { key: "homeschool", label: "Homeschool", mod: "homeschool" },
     ];
     var rows = [];
     for (var d = 0; d < defRows.length; d++) {
@@ -3391,18 +3815,22 @@
       return "<p class=\"sandbox-stat-line\">—</p>";
     }
     var maxC = 0;
-    var mapTotal = 0;
-    var includedTotal = 0;
+    var rowSum = 0;
     for (var t = 0; t < rows.length; t++) {
       var c0 = (byType && byType[rows[t].key]) || 0;
-      mapTotal += c0;
-      if (isSandboxAttendanceTypeKeyIncludedForFilter(rows[t].key)) {
-        includedTotal += c0;
-      }
+      rowSum += c0;
       if (c0 > maxC) {
         maxC = c0;
       }
     }
+    var mapTotal =
+      selectionTotalAll != null && !isNaN(Number(selectionTotalAll))
+        ? Number(selectionTotalAll)
+        : rowSum;
+    var includedTotal =
+      includedInDetails != null && !isNaN(Number(includedInDetails))
+        ? Number(includedInDetails)
+        : rowSum;
     if (maxC <= 0) {
       return "<p class=\"sandbox-stat-line\">—</p>";
     }
@@ -3494,6 +3922,8 @@
   function aggregateBoundarySandboxSelectionFromIndex(hexKeyBag) {
     var out = {
       totalStudents: 0,
+      /** All students in the hex selection (ignores grade / attendance checkboxes). */
+      selectionTotalAllStudents: 0,
       byGrade: {},
       byAttendance: {},
       byAttendanceTypeFull: {},
@@ -3501,85 +3931,175 @@
       ethnicity: {},
       lunch: {},
     };
-    if (!STUDENT_HEX_INDEX || !STUDENT_HEX_INDEX.detailsByMsid) {
+    var hasTrad = STUDENT_HEX_INDEX && STUDENT_HEX_INDEX.detailsByMsid;
+    var hmByHex = HOMESCHOOL_DETAILS_BY_HEX_KEY;
+    var hasHm = !!(hmByHex && Object.keys(hmByHex).length);
+    if (!hasTrad && !hasHm) {
       return out;
     }
     var keyBag = hexKeyBag || BOUNDARY_SANDBOX.selectedHexKeys;
-    var byDet = STUDENT_HEX_INDEX.detailsByMsid;
+    var byDet = hasTrad ? STUDENT_HEX_INDEX.detailsByMsid : null;
     var fullByGrade = {};
+    /** Attendance-type histogram with grade toggles applied (symmetric to grade chart using attendance toggles). */
     var fullByAT = Object.create(null);
-    for (var attMs0 in byDet) {
-      if (!Object.prototype.hasOwnProperty.call(byDet, attMs0)) {
-        continue;
-      }
-      var hexMap0 = byDet[attMs0];
-      for (var hk0 in keyBag) {
-        if (!keyBag[hk0]) {
+    /** Grade histogram with attendance-type toggles applied (symmetric to attendance chart using grade toggles). */
+    var gradeByAttendanceFilter = {};
+    if (hasTrad) {
+      for (var attMs0 in byDet) {
+        if (!Object.prototype.hasOwnProperty.call(byDet, attMs0)) {
           continue;
         }
-        var arr0 = hexMap0[hk0];
-        if (!arr0 || !arr0.length) {
-          continue;
-        }
-        for (var i0 = 0; i0 < arr0.length; i0++) {
-          var d0 = arr0[i0];
-          if (!d0) {
+        var hexMap0 = byDet[attMs0];
+        for (var hk0 in keyBag) {
+          if (!keyBag[hk0]) {
             continue;
           }
-          var g0 = canonicalStudentGradeCode(d0.Grade) || "__UNK__";
-          fullByGrade[g0] = (fullByGrade[g0] || 0) + 1;
-          if (detailIncludedBySandboxGradeToggle(d0)) {
-            var aCat = sandboxAttendanceCategoryForDetail(d0);
-            fullByAT[aCat] = (fullByAT[aCat] || 0) + 1;
+          var arr0 = hexMap0[hk0];
+          if (!arr0 || !arr0.length) {
+            continue;
+          }
+          for (var i0 = 0; i0 < arr0.length; i0++) {
+            var d0 = arr0[i0];
+            if (!d0) {
+              continue;
+            }
+            var g0 = sandboxGradeCanonicalForDetail(d0);
+            fullByGrade[g0] = (fullByGrade[g0] || 0) + 1;
+            if (detailIncludedBySandboxAttendanceTypeToggle(d0)) {
+              gradeByAttendanceFilter[g0] = (gradeByAttendanceFilter[g0] || 0) + 1;
+            }
+            if (detailIncludedBySandboxGradeToggle(d0)) {
+              var aCat = sandboxAttendanceCategoryForDetail(d0);
+              fullByAT[aCat] = (fullByAT[aCat] || 0) + 1;
+            }
           }
         }
       }
     }
-    out.byGrade = fullByGrade;
+    if (hmByHex) {
+      for (var hkHs in keyBag) {
+        if (!keyBag[hkHs]) {
+          continue;
+        }
+        var hmArr0 = hmByHex[hkHs];
+        if (!hmArr0 || !hmArr0.length) {
+          continue;
+        }
+        for (var ih0 = 0; ih0 < hmArr0.length; ih0++) {
+          var dh0 = hmArr0[ih0];
+          if (!dh0) {
+            continue;
+          }
+          var gHs = sandboxGradeCanonicalForDetail(dh0);
+          fullByGrade[gHs] = (fullByGrade[gHs] || 0) + 1;
+          if (detailIncludedBySandboxAttendanceTypeToggle(dh0)) {
+            gradeByAttendanceFilter[gHs] = (gradeByAttendanceFilter[gHs] || 0) + 1;
+          }
+          if (detailIncludedBySandboxGradeToggle(dh0)) {
+            var aCatHs = sandboxAttendanceCategoryForDetail(dh0);
+            fullByAT[aCatHs] = (fullByAT[aCatHs] || 0) + 1;
+          }
+        }
+      }
+    }
+    for (var gFill in fullByGrade) {
+      if (Object.prototype.hasOwnProperty.call(fullByGrade, gFill)) {
+        if (gradeByAttendanceFilter[gFill] == null) {
+          gradeByAttendanceFilter[gFill] = 0;
+        }
+      }
+    }
+    var selTot = 0;
+    for (var stKey in fullByGrade) {
+      if (Object.prototype.hasOwnProperty.call(fullByGrade, stKey)) {
+        selTot += fullByGrade[stKey] || 0;
+      }
+    }
+    out.selectionTotalAllStudents = selTot;
+    out.byGrade = gradeByAttendanceFilter;
     out.byAttendanceTypeFull = fullByAT;
     syncSandboxGradeTogglesFromFullByGrade(fullByGrade);
     syncSandboxAttendanceTypeTogglesFromFull(fullByAT);
 
-    for (var attMs in byDet) {
-      if (!Object.prototype.hasOwnProperty.call(byDet, attMs)) {
-        continue;
+    if (hasTrad) {
+      for (var attMs in byDet) {
+        if (!Object.prototype.hasOwnProperty.call(byDet, attMs)) {
+          continue;
+        }
+        var hexMap = byDet[attMs];
+        for (var hk in keyBag) {
+          if (!keyBag[hk]) {
+            continue;
+          }
+          var arr = hexMap[hk];
+          if (!arr || !arr.length) {
+            continue;
+          }
+          for (var i = 0; i < arr.length; i++) {
+            var d = arr[i];
+            if (!d) {
+              continue;
+            }
+            if (!detailIncludedBySandboxGradeToggle(d)) {
+              continue;
+            }
+            if (!detailIncludedBySandboxAttendanceTypeToggle(d)) {
+              continue;
+            }
+            out.totalStudents += 1;
+            var am = parseInt(String(d.MSID).trim(), 10);
+            if (!isNaN(am)) {
+              var aKey = String(am);
+              out.byAttendance[aKey] = (out.byAttendance[aKey] || 0) + 1;
+            }
+            var zm = zonedMsidForDetailForAggregate(d);
+            var zKey = zm != null ? String(zm) : "__none__";
+            out.byZoned[zKey] = (out.byZoned[zKey] || 0) + 1;
+            var eth =
+              d.ethnicity != null && String(d.ethnicity).trim() !== ""
+                ? String(d.ethnicity).trim()
+                : "Unspecified";
+            out.ethnicity[eth] = (out.ethnicity[eth] || 0) + 1;
+            var lNorm = normalizeSandboxLunchStatForPie(d.lunch_stat);
+            out.lunch[lNorm] = (out.lunch[lNorm] || 0) + 1;
+          }
+        }
       }
-      var hexMap = byDet[attMs];
-      for (var hk in keyBag) {
-        if (!keyBag[hk]) {
+    }
+    if (hmByHex) {
+      for (var hkHm in keyBag) {
+        if (!keyBag[hkHm]) {
           continue;
         }
-        var arr = hexMap[hk];
-        if (!arr || !arr.length) {
+        var hmArr = hmByHex[hkHm];
+        if (!hmArr || !hmArr.length) {
           continue;
         }
-        for (var i = 0; i < arr.length; i++) {
-          var d = arr[i];
-          if (!d) {
+        for (var jh = 0; jh < hmArr.length; jh++) {
+          var dh = hmArr[jh];
+          if (!dh) {
             continue;
           }
-          if (!detailIncludedBySandboxGradeToggle(d)) {
+          if (!detailIncludedBySandboxGradeToggle(dh)) {
             continue;
           }
-          if (!detailIncludedBySandboxAttendanceTypeToggle(d)) {
+          if (!detailIncludedBySandboxAttendanceTypeToggle(dh)) {
             continue;
           }
           out.totalStudents += 1;
-          var am = parseInt(String(d.MSID).trim(), 10);
-          if (!isNaN(am)) {
-            var aKey = String(am);
-            out.byAttendance[aKey] = (out.byAttendance[aKey] || 0) + 1;
+          var amh = parseInt(String(dh.MSID).trim(), 10);
+          if (!isNaN(amh)) {
+            var aKeyh = String(amh);
+            out.byAttendance[aKeyh] = (out.byAttendance[aKeyh] || 0) + 1;
           }
-          var zm = zonedMsidForDetailForAggregate(d);
-          var zKey = zm != null ? String(zm) : "__none__";
-          out.byZoned[zKey] = (out.byZoned[zKey] || 0) + 1;
-          var eth =
-            d.ethnicity != null && String(d.ethnicity).trim() !== ""
-              ? String(d.ethnicity).trim()
-              : "Unspecified";
-          out.ethnicity[eth] = (out.ethnicity[eth] || 0) + 1;
-          var lNorm = normalizeSandboxLunchStatForPie(d.lunch_stat);
-          out.lunch[lNorm] = (out.lunch[lNorm] || 0) + 1;
+          var zmH = zonedMsidForDetailForAggregate(dh);
+          var zKeyH;
+          if (dh.__homeschool && sandboxGradeCanonicalForDetail(dh) === "__NOGRADE__") {
+            zKeyH = "__homeschool_not_age_eligible__";
+          } else {
+            zKeyH = zmH != null ? String(zmH) : "__none__";
+          }
+          out.byZoned[zKeyH] = (out.byZoned[zKeyH] || 0) + 1;
         }
       }
     }
@@ -3609,8 +4129,14 @@
   }
 
   function sandboxDisplayNameForMsidKey(msidStr) {
+    if (msidStr === "__homeschool_not_age_eligible__") {
+      return "No Zoned School - Not Age Eligible";
+    }
     if (msidStr === "__none__") {
       return "Zoning not set";
+    }
+    if (String(msidStr) === String(HOMESCHOOL_ATTENDANCE_MSID)) {
+      return "Home Education (Homeschool)";
     }
     var n = parseInt(String(msidStr), 10);
     if (isNaN(n)) {
@@ -3638,7 +4164,29 @@
     return true;
   }
 
-  function formatSandboxGradeBarChartHtml(byGrade) {
+  /** Whether every grade row is included, every row excluded, or mixed (for select-all UI). */
+  function sandboxGradeFilterAggregateState(byGrade) {
+    var keys = Object.keys(byGrade || {});
+    if (!keys.length) {
+      return { allOn: false, allOff: false, keysCount: 0 };
+    }
+    var allOn = true;
+    var allOff = true;
+    for (var i = 0; i < keys.length; i++) {
+      if (isSandboxGradeKeyIncludedForFilter(keys[i])) {
+        allOff = false;
+      } else {
+        allOn = false;
+      }
+    }
+    return { allOn: allOn, allOff: allOff, keysCount: keys.length };
+  }
+
+  /**
+   * @param {number|undefined} selectionTotalAll students in hex selection (ignores checkboxes)
+   * @param {number|undefined} includedInDetails cohort passing grade + attendance toggles
+   */
+  function formatSandboxGradeBarChartHtml(byGrade, selectionTotalAll, includedInDetails) {
     var keys = Object.keys(byGrade);
     if (!keys.length) {
       return "<p class=\"sandbox-stat-line\">—</p>";
@@ -3647,35 +4195,72 @@
       return travelShedGradeSortKey(a) - travelShedGradeSortKey(b);
     });
     var maxC = 0;
-    var mapTotal = 0;
-    var includedTotal = 0;
+    var rowSum = 0;
+    var allGradeFiltersOn = true;
+    var allGradeFiltersOff = true;
     for (var t = 0; t < keys.length; t++) {
       var c0 = byGrade[keys[t]] || 0;
-      mapTotal += c0;
-      if (isSandboxGradeKeyIncludedForFilter(keys[t])) {
-        includedTotal += c0;
+      rowSum += c0;
+      var incRow = isSandboxGradeKeyIncludedForFilter(keys[t]);
+      if (incRow) {
+        allGradeFiltersOff = false;
+      } else {
+        allGradeFiltersOn = false;
       }
       if (c0 > maxC) {
         maxC = c0;
       }
     }
+    var mapTotal =
+      selectionTotalAll != null && !isNaN(Number(selectionTotalAll))
+        ? Number(selectionTotalAll)
+        : rowSum;
+    var includedTotal =
+      includedInDetails != null && !isNaN(Number(includedInDetails))
+        ? Number(includedInDetails)
+        : rowSum;
     if (maxC <= 0) {
       return "<p class=\"sandbox-stat-line\">—</p>";
     }
     var parts = [
       '<div class="sandbox-grade-chart" role="group" aria-label="Students by grade in this selection">',
     ];
+    var selAllChecked = allGradeFiltersOn && keys.length > 0;
+    parts.push(
+      '<div class="sandbox-grade-row sandbox-grade-row--select-all">' +
+        '<div class="sandbox-grade-check">' +
+        "<input" +
+        (selAllChecked ? " checked" : "") +
+        ' type="checkbox" class="sandbox-grade-select-all" ' +
+        'aria-label="Select or clear all grades in this list" ' +
+        'title="Select or clear all grades" />' +
+        "</div>" +
+        '<div class="sandbox-grade-label-col sandbox-grade-label-col--select-all">All</div>' +
+        '<div class="sandbox-grade-bar-area" aria-hidden="true"></div>' +
+        '<div class="sandbox-grade-count-col" aria-hidden="true"></div>' +
+        "</div>"
+    );
     for (var k = 0; k < keys.length; k++) {
       var key = keys[k];
       var c = byGrade[key] || 0;
       var inc = isSandboxGradeKeyIncludedForFilter(key);
-      var lab = travelShedGradeDisplayLabel(key);
+      var labFull = travelShedGradeDisplayLabel(key);
+      var lab = key === "__NOGRADE__" ? "NG" : labFull;
       var wPct = Math.max(0, Math.min(100, Math.round((c / maxC) * 100)));
-      var title = c + " student" + (c === 1 ? "" : "s") + ", grade " + lab;
+      var title =
+        key === "__NOGRADE__"
+          ? c + " student" + (c === 1 ? "" : "s") + " (no grade code)"
+          : c + " student" + (c === 1 ? "" : "s") + ", grade " + labFull;
       var aLab =
-        (lab === "Unknown" ? "Unknown or unspecified" : "Grade " + lab) +
-        (inc ? " — include in details below" : " — exclude from details below");
+        key === "__NOGRADE__"
+          ? "No grade code" + (inc ? " — include in details below" : " — exclude from details below")
+          : (labFull === "Unknown" ? "Unknown or unspecified" : "Grade " + labFull) +
+            (inc ? " — include in details below" : " — exclude from details below");
       var chk = inc ? " checked" : "";
+      var toggleTitleShort =
+        key === "__NOGRADE__"
+          ? "Include in attendance, zoned, and demographics: no grade code"
+          : "Include in attendance, zoned, and demographics: " + labFull;
       parts.push(
         '<div class="sandbox-grade-row" data-sandbox-grade-row="' +
           escapeHtml(String(key)) +
@@ -3688,7 +4273,7 @@
           '" aria-label="' +
           escapeHtml(aLab) +
           '" title="' +
-          escapeHtml("Include in attendance, zoned, and demographics: " + lab) +
+          escapeHtml(toggleTitleShort) +
           '" />' +
           "</div>" +
           '<div class="sandbox-grade-label-col">' +
@@ -3837,17 +4422,44 @@
       !BOUNDARY_SANDBOX.selectionConfirmed &&
       countSandboxHexKeys(BOUNDARY_SANDBOX.confirmedHexKeysSnapshot) > 0;
     var agg = aggregateBoundarySandboxSelectionFromIndex(statsKeys);
-    var totalInHex = 0;
-    if (agg.byGrade) {
-      for (var kg in agg.byGrade) {
-        if (Object.prototype.hasOwnProperty.call(agg.byGrade, kg)) {
-          totalInHex += agg.byGrade[kg] || 0;
-        }
-      }
-    }
+    var totalInHex =
+      agg.selectionTotalAllStudents != null && !isNaN(Number(agg.selectionTotalAllStudents))
+        ? Number(agg.selectionTotalAllStudents)
+        : 0;
     h.textContent = "Students in selection (" + nHex + (nHex === 1 ? " hex" : " hexes") + ")";
     var inHexStr = totalInHex.toLocaleString();
     var inHexNoun = totalInHex === 1 ? "student" : "students";
+    var atB = document.getElementById("sandbox-card-body-attendance-type");
+    var gB = document.getElementById("sandbox-card-body-grade");
+    var aB = document.getElementById("sandbox-card-body-attendance");
+    var zB = document.getElementById("sandbox-card-body-zoned");
+    var suppressDetailedStats = totalInHex <= 10;
+    var suppressionLead =
+      "Detailed statistics are hidden when the filtered selection contains too few students.";
+    if (suppressDetailedStats) {
+      if (showPendingHint) {
+        lead.innerHTML =
+          "<strong>Statistics below reflect your last confirmed selection.</strong> The map may show unsaved edits — click <strong>Confirm selection</strong> to refresh these figures. " +
+          suppressionLead;
+      } else {
+        lead.innerHTML = suppressionLead;
+      }
+      if (atB) atB.innerHTML = '<p class="sandbox-stat-line">—</p>';
+      if (gB) gB.innerHTML = '<p class="sandbox-stat-line">—</p>';
+      if (aB) aB.innerHTML = '<p class="sandbox-stat-line">—</p>';
+      if (zB) zB.innerHTML = '<p class="sandbox-stat-line">—</p>';
+      var ethSup = document.getElementById("sandbox-demographics-ethnicity");
+      var lunchSup = document.getElementById("sandbox-demographics-lunch");
+      if (ethSup) {
+        ethSup.innerHTML =
+          '<p class="demographics-pie-empty">Detailed demographics appear when more students are included.</p>';
+      }
+      if (lunchSup) {
+        lunchSup.innerHTML =
+          '<p class="demographics-pie-empty">Detailed demographics appear when more students are included.</p>';
+      }
+      return;
+    }
     if (showPendingHint) {
       lead.innerHTML =
         "<strong>Statistics below reflect your last confirmed selection.</strong> The map may show unsaved edits — click <strong>Confirm selection</strong> to refresh these figures. " +
@@ -3864,17 +4476,42 @@
         inHexNoun +
         " live in the selected hex cells. Toggle grades or school types to exclude them from statistics below.";
     }
-    var atB = document.getElementById("sandbox-card-body-attendance-type");
+    var detailIncluded =
+      agg.totalStudents != null && !isNaN(Number(agg.totalStudents)) ? Number(agg.totalStudents) : 0;
     if (atB) {
-      atB.innerHTML = formatSandboxAttendanceTypeBarHtml(agg.byAttendanceTypeFull || {});
+      atB.innerHTML = formatSandboxAttendanceTypeBarHtml(
+        agg.byAttendanceTypeFull || {},
+        totalInHex,
+        detailIncluded
+      );
     }
-    var gB = document.getElementById("sandbox-card-body-grade");
-    var aB = document.getElementById("sandbox-card-body-attendance");
-    var zB = document.getElementById("sandbox-card-body-zoned");
-    if (gB) gB.innerHTML = formatSandboxGradeBarChartHtml(agg.byGrade);
+    if (gB) {
+      gB.innerHTML = formatSandboxGradeBarChartHtml(agg.byGrade, totalInHex, detailIncluded);
+      var gSelAll = gB.querySelector(".sandbox-grade-select-all");
+      if (gSelAll) {
+        var gAgg = sandboxGradeFilterAggregateState(agg.byGrade);
+        gSelAll.indeterminate =
+          gAgg.keysCount > 0 && !gAgg.allOn && !gAgg.allOff;
+      }
+    }
     if (aB) aB.innerHTML = formatSandboxSchoolListHtml(agg.byAttendance, 5, "attendance");
     if (zB) zB.innerHTML = formatSandboxSchoolListHtml(agg.byZoned, 5, "zoned");
-    renderSandboxHexLayerDemographicPies(agg.ethnicity, agg.lunch);
+    /* Demographics use the grade + attendance-type filtered cohort only (`totalStudents`). */
+    var filteredForDemographics = agg.totalStudents != null ? agg.totalStudents : 0;
+    if (filteredForDemographics <= 5) {
+      var ethDemo = document.getElementById("sandbox-demographics-ethnicity");
+      var lunchDemo = document.getElementById("sandbox-demographics-lunch");
+      if (ethDemo) {
+        ethDemo.innerHTML =
+          '<p class="demographics-pie-empty">Detailed demographics appear when more students are included.</p>';
+      }
+      if (lunchDemo) {
+        lunchDemo.innerHTML =
+          '<p class="demographics-pie-empty">Detailed demographics appear when more students are included.</p>';
+      }
+    } else {
+      renderSandboxHexLayerDemographicPies(agg.ethnicity, agg.lunch);
+    }
   }
 
   function downloadTextAsCsvFile(filename, text) {
@@ -3920,6 +4557,12 @@
         BOUNDARY_SANDBOX.selectedHexKeys[hk] = true;
       }
     }
+    var hmInPoly = homeschoolHexKeysWithCentroidInAssignmentBoundary(baseMsid);
+    for (var hmk in hmInPoly) {
+      if (hmInPoly[hmk]) {
+        BOUNDARY_SANDBOX.selectedHexKeys[hmk] = true;
+      }
+    }
     syncSandboxLassoFootprintFromSelectedHexGeometries();
     applyBoundarySandboxSelectionFeatureStates();
   }
@@ -3954,6 +4597,25 @@
         properties: { _hexKey: k },
         geometry: g,
       });
+    }
+    if (HOMESCHOOL_HEX_GEOMETRY_FALLBACK) {
+      for (var fk in HOMESCHOOL_HEX_GEOMETRY_FALLBACK) {
+        if (!Object.prototype.hasOwnProperty.call(HOMESCHOOL_HEX_GEOMETRY_FALLBACK, fk)) {
+          continue;
+        }
+        if (gk[fk]) {
+          continue;
+        }
+        var gHm = HOMESCHOOL_HEX_GEOMETRY_FALLBACK[fk];
+        if (!gHm) {
+          continue;
+        }
+        feats.push({
+          type: "Feature",
+          properties: { _hexKey: fk },
+          geometry: gHm,
+        });
+      }
     }
     try {
       map.getSource("boundary-sandbox-hex").setData({
@@ -4336,6 +4998,29 @@
         }
       );
     }
+
+    var hsHexEl = document.getElementById("homeschool-student-hex-toggles");
+    if (hsHexEl) {
+      appendToggleRow(
+        hsHexEl,
+        {
+          id: "homeschool-student-hex",
+          label: "Homeschool student residence density",
+          layerIds: [
+            "homeschool-student-hex-heatmap",
+            "homeschool-student-hex-hit-fill",
+          ],
+          gradientStrip: true,
+          gradientStripClass: "toggle-gradient-strip--homeschool-red",
+          defaultChecked: false,
+        },
+        function () {
+          syncHomeschoolStudentHexLayer();
+          syncStudentHexTooltipCheckboxVisibility();
+          syncMapDensityLegend();
+        }
+      );
+    }
     if (document.getElementById("student-hex-tooltip-row") != null) {
       syncStudentHexTooltipCheckboxVisibility();
     }
@@ -4394,7 +5079,17 @@
         label: "Charter schools",
         layerIds: ["schools-charter"],
         swatchColor: PALETTE.charter.fill,
-        defaultChecked: true,
+        defaultChecked: false,
+      });
+    }
+    var privateSchoolTogglesEl = document.getElementById("private-school-toggles");
+    if (privateSchoolTogglesEl) {
+      appendToggleRow(privateSchoolTogglesEl, {
+        id: "private-schools",
+        label: "Private schools",
+        layerIds: ["schools-private"],
+        swatchColor: PALETTE.privateSchool.fill,
+        defaultChecked: false,
       });
     }
     syncMapDensityLegend();
@@ -4412,6 +5107,7 @@
    * Used with queryRenderedFeatures: first hit is the topmost visible in that set.
    */
   var SCHOOL_LAYERS_CLICK_TOP_FIRST = [
+    "schools-private",
     "schools-charter",
     "schools-elementary",
     "schools-middle",
@@ -4434,6 +5130,7 @@
 
   /** Topmost paint order first: used so queryRenderedFeatures returns the visually top feature first. */
   var MAP_OVERLAY_HIT_LAYER_ORDER_TOP_FIRST = [
+    "schools-private",
     "schools-charter",
     "schools-elementary",
     "schools-middle",
@@ -4442,6 +5139,7 @@
     "boundary-sandbox-lasso-region-outline",
     "boundary-sandbox-lasso-region-fill",
     "charter-student-hex-hit-fill",
+    "homeschool-student-hex-hit-fill",
     "student-hex-hit-fill",
     "school-parcels-elementary",
     "school-parcels-jr-sr",
@@ -4707,6 +5405,117 @@
     });
   }
 
+  /** Pre-K through Grade 12 enrollment columns on private-school GeoJSON features. */
+  var PRIVATE_SCHOOL_GRADE_KEYS = [
+    { key: "Pre_K", ord: -2 },
+    { key: "Kindergart", ord: -1 },
+    { key: "Grade_1", ord: 1 },
+    { key: "Grade_2", ord: 2 },
+    { key: "Grade_3", ord: 3 },
+    { key: "Grade_4", ord: 4 },
+    { key: "Grade_5", ord: 5 },
+    { key: "Grade_6", ord: 6 },
+    { key: "Grade_7", ord: 7 },
+    { key: "Grade_8", ord: 8 },
+    { key: "Grade_9", ord: 9 },
+    { key: "Grade_10", ord: 10 },
+    { key: "Grade_11", ord: 11 },
+    { key: "Grade_12", ord: 12 },
+  ];
+
+  function privateSchoolGradeOrdinalLabel(ord) {
+    if (ord === -2) return "Pre-K";
+    if (ord === -1) return "K";
+    return String(ord);
+  }
+
+  /**
+   * Total enrollment (sum of grade columns) and display span from min–max grade with ≥1 student.
+   * @returns {{ total: number, gradesLabel: string }}
+   */
+  function privateSchoolEnrollmentGradeSpan(props) {
+    var total = 0;
+    var minO = Infinity;
+    var maxO = -Infinity;
+    if (!props) {
+      return { total: 0, gradesLabel: "" };
+    }
+    for (var i = 0; i < PRIVATE_SCHOOL_GRADE_KEYS.length; i++) {
+      var g = PRIVATE_SCHOOL_GRADE_KEYS[i];
+      var n = Number(props[g.key]);
+      if (isNaN(n)) n = 0;
+      total += n;
+      if (n > 0) {
+        if (g.ord < minO) minO = g.ord;
+        if (g.ord > maxO) maxO = g.ord;
+      }
+    }
+    if (!isFinite(minO)) {
+      return { total: total, gradesLabel: "" };
+    }
+    var a = privateSchoolGradeOrdinalLabel(minO);
+    var b = privateSchoolGradeOrdinalLabel(maxO);
+    var gradesLabel = minO === maxO ? a : a + "–" + b;
+    return { total: total, gradesLabel: gradesLabel };
+  }
+
+  /** Drop private-school points with no enrollment in any grade column. */
+  function filterZeroEnrollmentPrivateSchoolsFc(fc) {
+    if (!fc || fc.type !== "FeatureCollection" || !fc.features) {
+      return { type: "FeatureCollection", features: [] };
+    }
+    var kept = [];
+    for (var i = 0; i < fc.features.length; i++) {
+      var eg = privateSchoolEnrollmentGradeSpan(fc.features[i].properties);
+      if (eg.total > 0) kept.push(fc.features[i]);
+    }
+    return { type: "FeatureCollection", features: kept };
+  }
+
+  function formatPrivateSchoolZipFive(zipRaw) {
+    if (zipRaw == null) return "";
+    var d = String(zipRaw).replace(/\D/g, "");
+    return d.length >= 5 ? d.slice(0, 5) : d;
+  }
+
+  /** Street, City, FL ZIP (ZIP trimmed to five digits). */
+  function privateSchoolAddressLine(props) {
+    if (!props) return "";
+    var streetRaw = props.Address_1 != null ? String(props.Address_1).trim() : "";
+    var cityRaw = props.City != null ? String(props.City).trim() : "";
+    var zip5 = formatPrivateSchoolZipFive(props.Zip);
+    var street = streetRaw ? standardCapitalization(streetRaw) : "";
+    var city = cityRaw ? standardCapitalization(expandWestMelbourneCity(cityRaw)) : "";
+    var parts = [];
+    if (street) parts.push(street);
+    if (city) parts.push(city);
+    var head = parts.join(", ");
+    if (!head) return zip5 ? "FL " + zip5 : "";
+    return head + ", FL" + (zip5 ? " " + zip5 : "");
+  }
+
+  function privateSchoolDetailHtml(p) {
+    var rawName = p && p.School_Nam != null ? String(p.School_Nam) : "";
+    var name = formatSchoolDisplayName(
+      standardCapitalization(expandElemSchoolName(rawName))
+    );
+    var eg = privateSchoolEnrollmentGradeSpan(p);
+    var parts = [
+      '<strong class="popup-school-name">' + escapeHtml(name) + "</strong>",
+      '<div class="popup-detail">Grades Served: ' +
+        escapeHtml(eg.gradesLabel || "—") +
+        "</div>",
+      '<div class="popup-detail">Total Enrollment: ' +
+        escapeHtml(String(eg.total.toLocaleString())) +
+        "</div>",
+    ];
+    var addr = privateSchoolAddressLine(p);
+    if (addr) {
+      parts.push('<div class="popup-detail">' + escapeHtml(addr) + "</div>");
+    }
+    return parts.join("");
+  }
+
   function schoolDetailHtml(p) {
     var name = schoolDisplayNameFromProps(p);
     var sid = p.SCHOOLS_ID != null ? Number(p.SCHOOLS_ID) : NaN;
@@ -4863,6 +5672,79 @@
       }
     }
     return null;
+  }
+
+  /**
+   * Assignment MSIDs from elementary / middle / high boundary layers at a residence point
+   * (same attendance-area polygons as capture KPIs and `countHomeschoolStudentsInAssignmentBoundary`).
+   * @returns {{ elem: number|null, mid: number|null, high: number|null }}
+   */
+  function attendanceZoningTripletAtLngLat(lng, lat) {
+    var out = { elem: null, mid: null, high: null };
+    if (
+      typeof turf === "undefined" ||
+      !turf ||
+      typeof turf.point !== "function" ||
+      typeof turf.feature !== "function" ||
+      typeof turf.booleanPointInPolygon !== "function"
+    ) {
+      return out;
+    }
+    var pt;
+    try {
+      pt = turf.point([lng, lat]);
+    } catch (ePt) {
+      return out;
+    }
+    function msidFromBoundaryFc(fc) {
+      if (!fc || !fc.features) {
+        return null;
+      }
+      for (var i = 0; i < fc.features.length; i++) {
+        var f = fc.features[i];
+        if (!f || !f.geometry) {
+          continue;
+        }
+        try {
+          var poly = turf.feature(f.geometry);
+          if (turf.booleanPointInPolygon(pt, poly)) {
+            var m =
+              f.properties && f.properties.MSID != null ? Number(f.properties.MSID) : NaN;
+            if (!isNaN(m) && m > 0) {
+              return Math.round(m);
+            }
+          }
+        } catch (eIn) {
+          /* ignore */
+        }
+      }
+      return null;
+    }
+    out.elem = msidFromBoundaryFc(GEO_CACHE.es);
+    out.mid = msidFromBoundaryFc(GEO_CACHE.ms);
+    out.high = msidFromBoundaryFc(GEO_CACHE.hs);
+    return out;
+  }
+
+  /**
+   * Zoning triplet for a homeschool hex: centroid of hex geometry vs es/ms/hs assignment layers.
+   */
+  function homeschoolAttendanceZoningTripletForHex(hexKey, feature) {
+    var out = { elem: null, mid: null, high: null };
+    var geom =
+      feature &&
+      feature.geometry &&
+      (feature.geometry.type === "Polygon" || feature.geometry.type === "MultiPolygon")
+        ? feature.geometry
+        : homeschoolHexGeometry(hexKey);
+    if (!geom) {
+      return out;
+    }
+    var ctr = polygonCentroid(geom);
+    if (!ctr || ctr.length < 2) {
+      return out;
+    }
+    return attendanceZoningTripletAtLngLat(ctr[0], ctr[1]);
   }
 
   function boundaryFillVisibleForSource(src) {
@@ -6816,6 +7698,22 @@
     return m;
   }
 
+  /**
+   * Selected middle school row for the scenario feeder list (blue swatch, checkbox controls merged totals).
+   */
+  function buildScenarioMiddleFeederRow(middleProps, middleMsid) {
+    var hasEnrollment = schoolHasEnrollmentWorkbook(middleMsid);
+    return {
+      sankeyLabel: "",
+      msid: middleMsid,
+      props: middleProps,
+      hasEnrollment: hasEnrollment,
+      flowValue: null,
+      flowProportion: 1,
+      isScenarioMiddleRow: true,
+    };
+  }
+
   function getFeederElementaryRowsForMiddle(middleProps, flows, schoolsFc) {
     var rows = [];
     if (!flows || !middleProps) return rows;
@@ -6876,7 +7774,8 @@
   }
 
   /**
-   * Middle-school attendance rows only count when attendance matches the scenario middle.
+   * Middle-school attendance rows only count when attendance matches the scenario middle,
+   * and when that middle is included via the feeder-list checkbox (same as merged enrollment).
    * Elementary attendance respects feeder checkboxes unless ignoreFeederCheckboxes (axis extent only).
    */
   function attendancePassesScenarioTravelFilter(
@@ -6890,7 +7789,13 @@
     var msStr = String(ms);
     var midSet = MIDDLE_SCHOOL_MSID_SET || {};
     if (midSet[msStr]) {
-      return ms === selectedMiddleMsid;
+      if (ms !== selectedMiddleMsid) {
+        return false;
+      }
+      if (ignoreFeederCheckboxes) {
+        return true;
+      }
+      return scenarioFeederChecked[selectedMiddleMsid] !== false;
     }
     for (var i = 0; i < feederRows.length; i++) {
       var r = feederRows[i];
@@ -7381,13 +8286,24 @@
 
   function collectScenarioWeightedSpec() {
     var out = [];
-    if (scenarioMiddleMsid != null && !isNaN(scenarioMiddleMsid)) {
-      out.push({ msid: scenarioMiddleMsid, weight: 1 });
+    if (!scenarioLastFeederRows.length) {
+      if (
+        scenarioMiddleMsid != null &&
+        !isNaN(scenarioMiddleMsid) &&
+        scenarioFeederChecked[scenarioMiddleMsid] !== false
+      ) {
+        out.push({ msid: scenarioMiddleMsid, weight: 1 });
+      }
+      return out;
     }
     for (var i = 0; i < scenarioLastFeederRows.length; i++) {
       var r = scenarioLastFeederRows[i];
       if (!r.hasEnrollment || r.msid == null) continue;
       if (scenarioFeederChecked[r.msid] === false) continue;
+      if (r.isScenarioMiddleRow) {
+        out.push({ msid: r.msid, weight: 1 });
+        continue;
+      }
       var w =
         scenarioCompleteMerger
           ? 1
@@ -7481,7 +8397,14 @@
         : null;
     var m = masterRow(msid);
     fillSchoolDetailsPrimarySecondary(pMerged, elP, elS);
-    var kpi = getSchoolKpiDisplayParts(pMerged, m, msid);
+    var hsScenario =
+      msid != null && !isNaN(msid)
+        ? countHomeschoolStudentsInAssignmentBoundary(msid)
+        : 0;
+    var kpi = getSchoolKpiDisplayParts(pMerged, m, msid, {
+      includeHomeschoolInCaptureDenominator: true,
+      homeschoolStudentsInBoundary: hsScenario,
+    });
     if (elKpiPri) {
       elKpiPri.textContent =
         "'25-26 Enrollment: " +
@@ -7495,7 +8418,7 @@
         "Key metrics from data/school_master.csv for the selected middle school.";
     }
     if (elKpiCap) {
-      elKpiCap.textContent =
+      var capScenario =
         "Assignment: " +
         kpi.assignmentStr +
         " | Other district: " +
@@ -7504,6 +8427,10 @@
         kpi.choiceStr +
         " | Charter: " +
         kpi.charterStr;
+      if (!kpi.captureIsChoice) {
+        capScenario += " | Homeschool: " + (kpi.homeschoolStr || "—");
+      }
+      elKpiCap.textContent = capScenario;
       elKpiCap.classList.remove("school-details-placeholder");
       if (kpi.scenarioCaptureCountsTitle) {
         elKpiCap.setAttribute("title", kpi.scenarioCaptureCountsTitle);
@@ -7549,6 +8476,9 @@
    * @param {{ enr: number|null, propAmt: number|null }} [pairOpt] from scenarioFeederEnrollmentProportionalPair to avoid duplicate work
    */
   function scenarioRemainingEsEnrollmentText(r, pairOpt) {
+    if (r && r.isScenarioMiddleRow) {
+      return "--";
+    }
     if (!r.props || !r.hasEnrollment || r.msid == null || isNaN(r.msid)) {
       console.warn(
         "[Scenario] Feeder list row has a disabled checkbox (unexpected): " +
@@ -7616,6 +8546,9 @@
    * @param {{ enr: number|null, propAmt: number|null }} [pairOpt]
    */
   function scenarioFeederUtilizationChangeText(r, pairOpt) {
+    if (r && r.isScenarioMiddleRow) {
+      return "--";
+    }
     if (!r.props || !r.hasEnrollment || r.msid == null || isNaN(r.msid)) {
       return "--";
     }
@@ -7721,7 +8654,9 @@
       var swatch = document.createElement("span");
       swatch.className = "scenario-feeder-swatch";
       swatch.setAttribute("aria-hidden", "true");
-      if (
+      if (r.isScenarioMiddleRow) {
+        swatch.style.background = SCENARIO_STACK_MIDDLE_COLOR;
+      } else if (
         r.msid != null &&
         !isNaN(r.msid) &&
         greenMap[r.msid]
@@ -7777,6 +8712,12 @@
         "aria-labelledby",
         "scenario-feeder-remaining-heading"
       );
+      if (r.isScenarioMiddleRow) {
+        remSpan.setAttribute(
+          "title",
+          "Not applicable — this column is for remaining enrollment at feeder elementary schools."
+        );
+      }
       remSpan.textContent = scenarioRemainingEsEnrollmentText(r, pairPP);
       var metricsWrap = document.createElement("div");
       metricsWrap.className = "scenario-feeder-item-metrics";
@@ -7786,7 +8727,9 @@
       utilSpan.setAttribute("aria-labelledby", "scenario-feeder-util-heading");
       utilSpan.setAttribute(
         "title",
-        "2025-26 utilization (school_master.csv). New value: Remaining ES Enrollment ÷ factored capacity (2025-26). Percentages are rounded to whole numbers."
+        r.isScenarioMiddleRow
+          ? "Not applicable — remaining elementary enrollment and utilization change apply to feeder elementary schools only."
+          : "2025-26 utilization (school_master.csv). New value: Remaining ES Enrollment ÷ factored capacity (2025-26). Percentages are rounded to whole numbers."
       );
       utilSpan.textContent = scenarioFeederUtilizationChangeText(r, pairPP);
       metricsWrap.appendChild(utilSpan);
@@ -7845,7 +8788,8 @@
     }
     var p3b = document.getElementById("scenario-details-kpi-capture");
     if (p3b) {
-      p3b.textContent = "Assignment: — | Other district: — | Choice: — | Charter: —";
+      p3b.textContent =
+        "Assignment: — | Other district: — | Choice: — | Charter: — | Homeschool: —";
       p3b.classList.add("school-details-placeholder");
       p3b.removeAttribute("title");
     }
@@ -7907,7 +8851,7 @@
       p,
       flows,
       schoolsFc
-    );
+    ).concat([buildScenarioMiddleFeederRow(p, msid)]);
     for (var i = 0; i < scenarioLastFeederRows.length; i++) {
       var r = scenarioLastFeederRows[i];
       if (r.hasEnrollment && r.msid != null) {
@@ -8091,11 +9035,35 @@
   }
 
   /**
+   * Tooltip line when capture denominators use an adjusted total (e.g. including homeschool residents).
+   */
+  function boundaryStudentsPhraseAdjusted(m, countKey, denominatorAdjusted, homeschoolStudentCount) {
+    var num = fromToStudentCount(m, countKey);
+    var den = denominatorAdjusted;
+    if (isNaN(den) || den <= 0 || isNaN(num)) {
+      return null;
+    }
+    var s =
+      num.toLocaleString() +
+      " of " +
+      den.toLocaleString() +
+      " students residing in the attendance boundary";
+    if (homeschoolStudentCount != null && homeschoolStudentCount > 0) {
+      s +=
+        " (denominator includes " +
+        Number(homeschoolStudentCount).toLocaleString() +
+        " grade-eligible homeschool students)";
+    }
+    return s;
+  }
+
+  /**
    * Shared display strings for KPI cards and scenario summary line (same rules).
    * From-To capture decimals: assignment_capture_rate, other_district_capture_rate, choice_capture_rate, charter_capture_rate.
+   * @param {Object|null} captureOpts optional; when `includeHomeschoolInCaptureDenominator` and `homeschoolStudentsInBoundary` are set, recomputes % from CSV numerators over expanded denominator.
    * @returns {Object}
    */
-  function getSchoolKpiDisplayParts(p, m, msid) {
+  function getSchoolKpiDisplayParts(p, m, msid, captureOpts) {
     var enrollmentStr = "—";
     if (m && m.enrollment_2025 !== "" && m.enrollment_2025 != null) {
       var ev = Number(m.enrollment_2025);
@@ -8154,6 +9122,9 @@
     var captureHoverOtherDistrict = null;
     var captureHoverChoice = null;
     var captureHoverCharter = null;
+    var homeschoolStr = "—";
+    var homeschoolTitle = null;
+    var captureHoverHomeschool = null;
     var scenarioCaptureCountsTitle = null;
 
     if (captureIsChoice) {
@@ -8171,48 +9142,138 @@
       captureHoverCharter = null;
       scenarioCaptureCountsTitle = null;
     } else if (m) {
-      var a = pctFromCsvDecimal(m.assignment_capture_rate, null);
-      assignmentStr = a.str;
-      assignmentTitle = a.title;
-      var o = pctFromCsvDecimal(m.other_district_capture_rate, null);
-      otherDistrictStr = o.str;
-      otherDistrictTitle = o.title;
-      var ch = pctFromCsvDecimal(m.choice_capture_rate, null);
-      choiceStr = ch.str;
-      choiceTitle = ch.title;
-      var chrt = pctFromCsvDecimal(m.charter_capture_rate, null);
-      charterStr = chrt.str;
-      charterTitle = chrt.title;
+      var useHsDen =
+        captureOpts &&
+        captureOpts.includeHomeschoolInCaptureDenominator === true;
+      var Hhs =
+        useHsDen && typeof captureOpts.homeschoolStudentsInBoundary === "number"
+          ? Math.max(0, Math.floor(Number(captureOpts.homeschoolStudentsInBoundary)))
+          : 0;
+      var Dbase = fromToResidentDenominatorForMaster(m);
 
-      captureHoverAssignment = boundaryPublicSchoolStudentsPhrase(
-        m,
-        "assignment_capture_students"
-      );
-      captureHoverOtherDistrict = boundaryPublicSchoolStudentsPhrase(
-        m,
-        "other_district_capture_students"
-      );
-      captureHoverChoice = boundaryPublicSchoolStudentsPhrase(m, "choice_capture_students");
-      captureHoverCharter = boundaryPublicSchoolStudentsPhrase(
-        m,
-        "charter_capture_students"
-      );
-
-      var countKeys = [
-        "assignment_capture_students",
-        "other_district_capture_students",
-        "choice_capture_students",
-        "charter_capture_students",
-      ];
-      var partsCt = [];
-      for (var ci = 0; ci < countKeys.length; ci++) {
-        var phrase = boundaryPublicSchoolStudentsPhrase(m, countKeys[ci]);
-        if (phrase) {
-          partsCt.push(phrase);
+      function pctStrFromCounts(num, den) {
+        if (isNaN(num) || isNaN(den) || den <= 0) {
+          return "—";
         }
+        var pctDisp = (num / den) * 100;
+        return (
+          (pctDisp % 1 === 0 ? String(pctDisp) : pctDisp.toFixed(1)) + "%"
+        );
       }
-      if (partsCt.length) {
-        scenarioCaptureCountsTitle = partsCt.join(" · ");
+
+      if (useHsDen && !isNaN(Dbase) && Dbase > 0) {
+        var Dadj = Dbase + Hhs;
+        var na = fromToStudentCount(m, "assignment_capture_students");
+        var no = fromToStudentCount(m, "other_district_capture_students");
+        var nc = fromToStudentCount(m, "choice_capture_students");
+        var nv = fromToStudentCount(m, "charter_capture_students");
+
+        assignmentStr = pctStrFromCounts(na, Dadj);
+        otherDistrictStr = pctStrFromCounts(no, Dadj);
+        choiceStr = pctStrFromCounts(nc, Dadj);
+        charterStr = pctStrFromCounts(nv, Dadj);
+        homeschoolStr = pctStrFromCounts(Hhs, Dadj);
+
+        captureHoverAssignment = boundaryStudentsPhraseAdjusted(
+          m,
+          "assignment_capture_students",
+          Dadj,
+          Hhs
+        );
+        captureHoverOtherDistrict = boundaryStudentsPhraseAdjusted(
+          m,
+          "other_district_capture_students",
+          Dadj,
+          Hhs
+        );
+        captureHoverChoice = boundaryStudentsPhraseAdjusted(
+          m,
+          "choice_capture_students",
+          Dadj,
+          Hhs
+        );
+        captureHoverCharter = boundaryStudentsPhraseAdjusted(
+          m,
+          "charter_capture_students",
+          Dadj,
+          Hhs
+        );
+        if (!isNaN(Hhs) && !isNaN(Dadj)) {
+          captureHoverHomeschool =
+            Hhs.toLocaleString() +
+            " of " +
+            Dadj.toLocaleString() +
+            " students residing in the attendance boundary (grade-eligible homeschool students)";
+        }
+
+        var countKeysAdj = [
+          "assignment_capture_students",
+          "other_district_capture_students",
+          "choice_capture_students",
+          "charter_capture_students",
+        ];
+        var partsCtAdj = [];
+        for (var cj = 0; cj < countKeysAdj.length; cj++) {
+          var phA = boundaryStudentsPhraseAdjusted(
+            m,
+            countKeysAdj[cj],
+            Dadj,
+            Hhs
+          );
+          if (phA) {
+            partsCtAdj.push(phA);
+          }
+        }
+        if (captureHoverHomeschool) {
+          partsCtAdj.push(captureHoverHomeschool);
+        }
+        if (partsCtAdj.length) {
+          scenarioCaptureCountsTitle = partsCtAdj.join(" · ");
+        }
+      } else {
+        var a = pctFromCsvDecimal(m.assignment_capture_rate, null);
+        assignmentStr = a.str;
+        assignmentTitle = a.title;
+        var o = pctFromCsvDecimal(m.other_district_capture_rate, null);
+        otherDistrictStr = o.str;
+        otherDistrictTitle = o.title;
+        var ch = pctFromCsvDecimal(m.choice_capture_rate, null);
+        choiceStr = ch.str;
+        choiceTitle = ch.title;
+        var chrt = pctFromCsvDecimal(m.charter_capture_rate, null);
+        charterStr = chrt.str;
+        charterTitle = chrt.title;
+
+        captureHoverAssignment = boundaryPublicSchoolStudentsPhrase(
+          m,
+          "assignment_capture_students"
+        );
+        captureHoverOtherDistrict = boundaryPublicSchoolStudentsPhrase(
+          m,
+          "other_district_capture_students"
+        );
+        captureHoverChoice = boundaryPublicSchoolStudentsPhrase(m, "choice_capture_students");
+        captureHoverCharter = boundaryPublicSchoolStudentsPhrase(
+          m,
+          "charter_capture_students"
+        );
+
+        var countKeys = [
+          "assignment_capture_students",
+          "other_district_capture_students",
+          "choice_capture_students",
+          "charter_capture_students",
+        ];
+        var partsCt = [];
+        for (var ci = 0; ci < countKeys.length; ci++) {
+          var phrase = boundaryPublicSchoolStudentsPhrase(m, countKeys[ci]);
+          if (phrase) {
+            partsCt.push(phrase);
+          }
+        }
+        if (partsCt.length) {
+          scenarioCaptureCountsTitle = partsCt.join(" · ");
+        }
       }
     }
 
@@ -8233,6 +9294,9 @@
       captureHoverOtherDistrict: captureHoverOtherDistrict,
       captureHoverChoice: captureHoverChoice,
       captureHoverCharter: captureHoverCharter,
+      homeschoolStr: homeschoolStr,
+      homeschoolTitle: homeschoolTitle,
+      captureHoverHomeschool: captureHoverHomeschool,
       scenarioCaptureCountsTitle: scenarioCaptureCountsTitle,
       /** @deprecated scenario line — use assignmentStr */
       captureStr: assignmentStr,
@@ -8317,7 +9381,16 @@
 
     fillSchoolDetailsPrimarySecondary(p, elP, elS);
 
-    var parts = getSchoolKpiDisplayParts(p, m, msid);
+    var hsCapCb = document.getElementById("toggle-include-homeschool-capture");
+    var includeHsCapture = !!(hsCapCb && hsCapCb.checked);
+    var hsInBoundary =
+      includeHsCapture && msid != null && !isNaN(msid)
+        ? countHomeschoolStudentsInAssignmentBoundary(msid)
+        : 0;
+    var parts = getSchoolKpiDisplayParts(p, m, msid, {
+      includeHomeschoolInCaptureDenominator: includeHsCapture,
+      homeschoolStudentsInBoundary: hsInBoundary,
+    });
 
     var capEl = document.getElementById("kpi-capacity");
     if (capEl) {
@@ -8426,6 +9499,43 @@
       parts.captureHoverCharter,
       parts.captureIsChoice
     );
+
+    var gridCap = document.getElementById("kpi-grid-capture");
+    var cardHs = document.getElementById("kpi-card-homeschool-capture");
+    var showHsCard = includeHsCapture && !parts.captureIsChoice;
+    if (gridCap) {
+      gridCap.classList.toggle("kpi-grid--capture--five", !!showHsCard);
+    }
+    if (cardHs) {
+      cardHs.hidden = !showHsCard;
+    }
+    var elHsCap = document.getElementById("kpi-homeschool-capture");
+    if (elHsCap) {
+      if (showHsCard && parts.homeschoolStr != null && parts.homeschoolStr !== "—") {
+        elHsCap.textContent = parts.homeschoolStr;
+        elHsCap.classList.remove("kpi-value--placeholder");
+        if (parts.captureHoverHomeschool) {
+          elHsCap.removeAttribute("title");
+          cardHs.setAttribute("title", parts.captureHoverHomeschool);
+        } else {
+          cardHs.removeAttribute("title");
+        }
+      } else if (showHsCard) {
+        elHsCap.textContent = parts.homeschoolStr || "—";
+        elHsCap.classList.toggle(
+          "kpi-value--placeholder",
+          !parts.homeschoolStr || parts.homeschoolStr === "—"
+        );
+        cardHs.removeAttribute("title");
+      } else {
+        elHsCap.textContent = "—";
+        elHsCap.classList.add("kpi-value--placeholder");
+        elHsCap.removeAttribute("title");
+        if (cardHs) {
+          cardHs.removeAttribute("title");
+        }
+      }
+    }
   }
 
   function resetLeftPanelPlaceholders() {
@@ -8453,6 +9563,7 @@
       "kpi-other-district-capture",
       "kpi-choice-capture",
       "kpi-charter-capture",
+      "kpi-homeschool-capture",
     ].forEach(function (id) {
       var k = document.getElementById(id);
       if (k) {
@@ -8466,6 +9577,14 @@
         }
       }
     });
+    var gridCapReset = document.getElementById("kpi-grid-capture");
+    if (gridCapReset) {
+      gridCapReset.classList.remove("kpi-grid--capture--five");
+    }
+    var cardHsReset = document.getElementById("kpi-card-homeschool-capture");
+    if (cardHsReset) {
+      cardHsReset.hidden = true;
+    }
     renderEnrollmentChart(null);
     renderDemographicsCharts(null);
     renderSankeyPanel(null);
@@ -8516,6 +9635,37 @@
     sel.addEventListener("change", function () {
       applyExistingSchoolFromSelectValue(schoolByMsid);
     });
+
+    var hsCapStorageKey = "brevardK8IncludeHomeschoolCapture";
+    var hsCapCb = document.getElementById("toggle-include-homeschool-capture");
+    if (hsCapCb) {
+      try {
+        if (sessionStorage.getItem(hsCapStorageKey) === "1") {
+          hsCapCb.checked = true;
+        }
+      } catch (eSs) {
+        /* ignore */
+      }
+      hsCapCb.addEventListener("change", function () {
+        try {
+          sessionStorage.setItem(hsCapStorageKey, hsCapCb.checked ? "1" : "0");
+        } catch (eS2) {
+          /* ignore */
+        }
+        var v = sel.value;
+        if (!v) {
+          return;
+        }
+        var mid = Number(v);
+        if (isNaN(mid)) {
+          return;
+        }
+        var sp = schoolByMsid[mid];
+        if (sp) {
+          updateLeftPanelFromSchool(sp);
+        }
+      });
+    }
   }
 
   function setupMapInteractions(schoolByMsid) {
@@ -8775,6 +9925,9 @@
     }
 
     function isStudentHexDensityTooltipEnabled() {
+      if (residenceDensityHeatmapHiddenAtCurrentZoom()) {
+        return false;
+      }
       var el = document.getElementById("toggle-student-hex-density-tooltip");
       return !el || el.checked;
     }
@@ -8785,7 +9938,8 @@
         var lid = MAP_OVERLAY_HIT_LAYER_ORDER_TOP_FIRST[i];
         if (
           (lid === "student-hex-hit-fill" ||
-            lid === "charter-student-hex-hit-fill") &&
+            lid === "charter-student-hex-hit-fill" ||
+            lid === "homeschool-student-hex-hit-fill") &&
           !isStudentHexDensityTooltipEnabled()
         ) {
           continue;
@@ -8821,6 +9975,19 @@
       var top = feats[0];
       var layerId = top.layer.id;
 
+      if (layerId === "schools-private") {
+        clearBoundaryHoverUi();
+        clearOutlineHighlight();
+        clearHoverRing();
+        refreshAssignmentBoundaryHighlight();
+        map.getCanvas().style.cursor = "pointer";
+        schoolHoverPopup
+          .setLngLat(e.lngLat)
+          .setHTML(privateSchoolDetailHtml(top.properties))
+          .addTo(map);
+        return;
+      }
+
       if (
         layerId === "schools-elementary" ||
         layerId === "schools-middle" ||
@@ -8842,7 +10009,11 @@
         return;
       }
 
-      if (layerId === "student-hex-hit-fill" || layerId === "charter-student-hex-hit-fill") {
+      if (
+        layerId === "student-hex-hit-fill" ||
+        layerId === "charter-student-hex-hit-fill" ||
+        layerId === "homeschool-student-hex-hit-fill"
+      ) {
         clearBoundaryHoverUi();
         clearSchoolHoverUi();
         refreshAssignmentBoundaryHighlight();
@@ -8855,6 +10026,10 @@
           isCharterStudentResidenceLayerEnabled() &&
           map.getLayer("charter-student-hex-hit-fill") &&
           map.getLayoutProperty("charter-student-hex-hit-fill", "visibility") === "visible";
+        var wantH =
+          isHomeschoolStudentResidenceLayerEnabled() &&
+          map.getLayer("homeschool-student-hex-hit-fill") &&
+          map.getLayoutProperty("homeschool-student-hex-hit-fill", "visibility") === "visible";
         var qLayers = [];
         if (wantB) {
           qLayers.push("student-hex-hit-fill");
@@ -8862,18 +10037,24 @@
         if (wantC) {
           qLayers.push("charter-student-hex-hit-fill");
         }
+        if (wantH) {
+          qLayers.push("homeschool-student-hex-hit-fill");
+        }
         if (!qLayers.length) {
           studentHexHoverPopup.remove();
         } else {
           var pair = map.queryRenderedFeatures(e.point, { layers: qLayers });
           var propsB = null;
           var propsC = null;
+          var propsH = null;
           for (var ip = 0; ip < pair.length; ip++) {
             var lId = pair[ip].layer && pair[ip].layer.id;
             if (lId === "student-hex-hit-fill" && !propsB) {
               propsB = pair[ip].properties;
             } else if (lId === "charter-student-hex-hit-fill" && !propsC) {
               propsC = pair[ip].properties;
+            } else if (lId === "homeschool-student-hex-hit-fill" && !propsH) {
+              propsH = pair[ip].properties;
             }
           }
           var cohortPhrase = studentResidenceCohortTooltipPhrase();
@@ -8883,8 +10064,10 @@
               combinedResidenceHexHoverHtml(
                 propsB,
                 propsC,
+                propsH,
                 wantB,
                 wantC,
+                wantH,
                 cohortPhrase
               )
             )
@@ -9406,6 +10589,233 @@
   }
 
   /**
+   * One increment per homeschool student row; hex id from GRID_ID matches main student hex keys.
+   * @param {Object|null} homeschoolFc
+   * @returns {Object<string, number>}
+   */
+  function buildHomeschoolHexCounts(homeschoolFc) {
+    var o = Object.create(null);
+    if (!homeschoolFc || !homeschoolFc.features) {
+      return o;
+    }
+    for (var i = 0; i < homeschoolFc.features.length; i++) {
+      var k = studentHexKey(homeschoolFc.features[i]);
+      o[k] = (o[k] || 0) + 1;
+    }
+    return o;
+  }
+
+  /**
+   * First polygon/MultiPolygon per hex key from homeschool features — used when that hex is absent from the student bundle.
+   * @param {Object|null} homeschoolFc
+   * @returns {Object<string, GeoJSON.Geometry>}
+   */
+  function buildHomeschoolHexGeometryFallback(homeschoolFc) {
+    var out = Object.create(null);
+    if (!homeschoolFc || !homeschoolFc.features) {
+      return out;
+    }
+    for (var i = 0; i < homeschoolFc.features.length; i++) {
+      var f = homeschoolFc.features[i];
+      if (!f || !f.geometry) {
+        continue;
+      }
+      var t = f.geometry.type;
+      if (t !== "Polygon" && t !== "MultiPolygon") {
+        continue;
+      }
+      var k = studentHexKey(f);
+      if (!out[k]) {
+        out[k] = f.geometry;
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Detail row for boundary sandbox: mirrors student hex fields (`ELEM_` / `MID_` / `HIGH_`) from homeschool export zoned columns.
+   */
+  /**
+   * @param {Object|null} zoningTriplet from `attendanceZoningTripletAtLngLat` / per-hex cache (`elem`/`mid`/`high`).
+   */
+  function homeschoolSandboxDetailFromProperties(props, zoningTriplet) {
+    props = props || {};
+    var zt = zoningTriplet || {};
+    function merged(propVal, inferredNum) {
+      if (msidNormForZoning(propVal) != null) {
+        return propVal;
+      }
+      if (inferredNum != null && !isNaN(Number(inferredNum)) && Number(inferredNum) > 0) {
+        return Math.round(Number(inferredNum));
+      }
+      return propVal;
+    }
+    return {
+      Grade: props.Grade,
+      MSID: HOMESCHOOL_ATTENDANCE_MSID,
+      ELEM_: merged(props.Zoned_Elem, zt.elem),
+      MID_: merged(props.Zoned_Midd, zt.mid),
+      HIGH_: merged(props.Zoned_High, zt.high),
+      INT_: null,
+      lunch_stat: null,
+      ethnicity: null,
+      __homeschool: true,
+    };
+  }
+
+  /**
+   * Homeschool students grouped by `studentHexKey` for sandbox aggregation (same keys as `HOMESCHOOL_HEX_COUNTS`).
+   */
+  function buildHomeschoolDetailsByHexKey(homeschoolFc) {
+    var byHex = Object.create(null);
+    if (!homeschoolFc || !homeschoolFc.features) {
+      return byHex;
+    }
+    var zoningByHex = Object.create(null);
+    for (var i = 0; i < homeschoolFc.features.length; i++) {
+      var f = homeschoolFc.features[i];
+      var k = studentHexKey(f);
+      if (!Object.prototype.hasOwnProperty.call(zoningByHex, k)) {
+        zoningByHex[k] = homeschoolAttendanceZoningTripletForHex(k, f);
+      }
+      var det = homeschoolSandboxDetailFromProperties(f.properties, zoningByHex[k]);
+      if (!byHex[k]) {
+        byHex[k] = [];
+      }
+      byHex[k].push(det);
+    }
+    return byHex;
+  }
+
+  /**
+   * Resolver for homeschool map layers and density tooltips: main student hex geometry when present,
+   * else homeschool-source hex polygon for GRIDs not in the bundle.
+   */
+  function homeschoolHexGeometry(hexKey) {
+    var k = String(hexKey);
+    if (
+      STUDENT_HEX_INDEX &&
+      STUDENT_HEX_INDEX.geometryByHexKey &&
+      STUDENT_HEX_INDEX.geometryByHexKey[k]
+    ) {
+      return STUDENT_HEX_INDEX.geometryByHexKey[k];
+    }
+    if (HOMESCHOOL_HEX_GEOMETRY_FALLBACK && HOMESCHOOL_HEX_GEOMETRY_FALLBACK[k]) {
+      return HOMESCHOOL_HEX_GEOMETRY_FALLBACK[k];
+    }
+    return null;
+  }
+
+  /**
+   * Hex keys where homeschool students live and the hex centroid lies inside the school’s assignment polygon.
+   * Same geographic rule as capture KPIs / density alignment (not “zoned from student index only”).
+   * @returns {Object<string, true>}
+   */
+  function homeschoolHexKeysWithCentroidInAssignmentBoundary(msid) {
+    var out = Object.create(null);
+    if (msid == null || isNaN(Number(msid))) {
+      return out;
+    }
+    if (
+      typeof turf === "undefined" ||
+      !turf ||
+      typeof turf.point !== "function" ||
+      typeof turf.feature !== "function" ||
+      typeof turf.booleanPointInPolygon !== "function"
+    ) {
+      return out;
+    }
+    if (!HOMESCHOOL_HEX_COUNTS) {
+      return out;
+    }
+    var bf = findBoundaryFeatureForMsid(Number(msid));
+    if (!bf || !bf.geometry) {
+      return out;
+    }
+    var polyFeat;
+    try {
+      polyFeat = turf.feature(bf.geometry);
+    } catch (ePoly) {
+      return out;
+    }
+    for (var hexKey in HOMESCHOOL_HEX_COUNTS) {
+      if (!Object.prototype.hasOwnProperty.call(HOMESCHOOL_HEX_COUNTS, hexKey)) {
+        continue;
+      }
+      var cnt = Number(HOMESCHOOL_HEX_COUNTS[hexKey]) || 0;
+      if (cnt <= 0) {
+        continue;
+      }
+      var gHex = homeschoolHexGeometry(hexKey);
+      if (!gHex) {
+        continue;
+      }
+      var ctr = polygonCentroid(gHex);
+      if (!ctr || ctr.length < 2) {
+        continue;
+      }
+      var inside = false;
+      try {
+        inside = turf.booleanPointInPolygon(turf.point(ctr), polyFeat);
+      } catch (eIn) {
+        inside = false;
+      }
+      if (inside) {
+        out[hexKey] = true;
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Grade-eligible homeschool students where the hex centroid lies inside the school’s assignment polygon.
+   * When per-student homeschool rows exist, counts only grades that match the school’s level band (same as From-To “resident” notion).
+   */
+  function countHomeschoolStudentsInAssignmentBoundary(msid) {
+    if (msid == null || isNaN(Number(msid))) {
+      return 0;
+    }
+    if (
+      typeof turf === "undefined" ||
+      !turf ||
+      typeof turf.point !== "function" ||
+      typeof turf.feature !== "function" ||
+      typeof turf.booleanPointInPolygon !== "function"
+    ) {
+      return 0;
+    }
+    if (!HOMESCHOOL_HEX_COUNTS) {
+      return 0;
+    }
+    var keyCache = String(Number(msid));
+    if (Object.prototype.hasOwnProperty.call(homeschoolInBoundaryByMsidCache, keyCache)) {
+      return homeschoolInBoundaryByMsidCache[keyCache];
+    }
+    var keyBag = homeschoolHexKeysWithCentroidInAssignmentBoundary(Number(msid));
+    var m = masterRow(Number(msid));
+    var total = 0;
+    for (var hk in keyBag) {
+      if (!keyBag[hk]) {
+        continue;
+      }
+      var cnt = Number(HOMESCHOOL_HEX_COUNTS[hk]) || 0;
+      var rows = HOMESCHOOL_DETAILS_BY_HEX_KEY && HOMESCHOOL_DETAILS_BY_HEX_KEY[hk];
+      if (m && rows && rows.length) {
+        for (var ir = 0; ir < rows.length; ir++) {
+          var rd = rows[ir];
+          if (rd && studentGradeInSelectedSchoolBand(rd.Grade, m, false)) {
+            total += 1;
+          }
+        }
+      } else {
+        total += cnt;
+      }
+    }
+    homeschoolInBoundaryByMsidCache[keyCache] = total;
+    return total;
+  }
+
+  /**
    * Unpacks `v:2` { g: hexId -> geometry, r: property[] } to a standard FeatureCollection.
    * Falls back to a plain FeatureCollection. Used to avoid repeating hex geometry in JSON.
    * @param {*} raw
@@ -9596,6 +11006,7 @@
   function travelShedGradeSortKey(canon) {
     if (canon === "PK") return 0;
     if (canon === "K") return 1;
+    if (canon === "__NOGRADE__") return 9998;
     if (canon === "__UNK__") return 9999;
     if (/^0[1-9]$/.test(canon)) return 2 + parseInt(canon, 10);
     if (/^1[0-2]$/.test(canon)) return 2 + parseInt(canon, 10);
@@ -9603,6 +11014,7 @@
   }
 
   function travelShedGradeDisplayLabel(canon) {
+    if (canon === "__NOGRADE__") return "No Grade";
     if (canon === "__UNK__") return "—";
     if (canon === "PK" || canon === "K") return canon;
     if (/^0[1-9]$/.test(canon)) return String(parseInt(canon, 10));
@@ -9826,6 +11238,11 @@
     return !inp || inp.checked;
   }
 
+  function isHomeschoolStudentResidenceLayerEnabled() {
+    var inp = document.getElementById("toggle-homeschool-student-hex");
+    return !inp || inp.checked;
+  }
+
   /**
    * Scenario: hex rows are keyed by each student's school MSID.
    * Always include students enrolled at the selected middle school, then add
@@ -9848,18 +11265,10 @@
       }
     }
 
-    addPart(scenarioMiddleMsid);
-
-    var midStr =
-      scenarioMiddleMsid != null && !isNaN(scenarioMiddleMsid)
-        ? String(scenarioMiddleMsid)
-        : null;
-
     for (var i = 0; i < scenarioLastFeederRows.length; i++) {
       var r = scenarioLastFeederRows[i];
       if (!r.hasEnrollment || r.msid == null || isNaN(r.msid)) continue;
       if (scenarioFeederChecked[r.msid] === false) continue;
-      if (midStr != null && String(r.msid) === midStr) continue;
       addPart(r.msid);
     }
     return combined;
@@ -9891,18 +11300,10 @@
       }
     }
 
-    appendPart(scenarioMiddleMsid);
-
-    var midStr2 =
-      scenarioMiddleMsid != null && !isNaN(scenarioMiddleMsid)
-        ? String(scenarioMiddleMsid)
-        : null;
-
     for (var j = 0; j < scenarioLastFeederRows.length; j++) {
       var r2 = scenarioLastFeederRows[j];
       if (!r2.hasEnrollment || r2.msid == null || isNaN(r2.msid)) continue;
       if (scenarioFeederChecked[r2.msid] === false) continue;
-      if (midStr2 != null && String(r2.msid) === midStr2) continue;
       appendPart(r2.msid);
     }
     return combined;
@@ -10443,6 +11844,57 @@
     return Math.round(totalC / nC);
   }
 
+  /**
+   * Mean of homeschool students per sq mi (including zeros) over the hovered hex and
+   * geometric neighbors, using aggregated `HOMESCHOOL_HEX_COUNTS`.
+   */
+  function neighborhoodAverageHomeschoolResidenceStudentsPerSqMi(centerHexKey, prebuiltHm) {
+    var hm;
+    if (prebuiltHm !== undefined) {
+      hm = prebuiltHm;
+    } else {
+      hm = HOMESCHOOL_HEX_COUNTS || Object.create(null);
+    }
+    var hk0 = String(centerHexKey);
+    if (!homeschoolHexGeometry(hk0)) {
+      return null;
+    }
+    var nbrs =
+      (STUDENT_HEX_INDEX &&
+        STUDENT_HEX_INDEX.neighborsByHexKey &&
+        STUDENT_HEX_INDEX.neighborsByHexKey[hk0]) ||
+      [];
+    var totalH = 0;
+    var nH = 0;
+    var keysH = [hk0].concat(nbrs);
+    var seenH = Object.create(null);
+    for (var j = 0; j < keysH.length; j++) {
+      var hkh = keysH[j];
+      if (seenH[hkh]) {
+        continue;
+      }
+      seenH[hkh] = true;
+      var gh = homeschoolHexGeometry(hkh);
+      if (!gh) {
+        continue;
+      }
+      nH += 1;
+      var cnt2 = 0;
+      if (Object.prototype.hasOwnProperty.call(hm, hkh)) {
+        cnt2 = Number(hm[hkh]) || 0;
+      }
+      if (cnt2 <= 0) {
+        continue;
+      }
+      var dens2 = studentsPerSqMiFromCountAndGeom(cnt2, gh);
+      totalH += dens2 != null && isFinite(dens2) ? dens2 : 0;
+    }
+    if (nH === 0) {
+      return null;
+    }
+    return Math.round(totalH / nH);
+  }
+
   /** Short label (e.g. "McNair MS") for student-hex map tooltips; matches eseTableAbbreviatedSchoolName. */
   function studentResidenceTooltipSchoolLabel() {
     var msid = getActiveDashboardSchoolMsid();
@@ -10493,27 +11945,27 @@
       showD = rawD;
     }
     var rawC = props && props.count != null ? Number(props.count) : NaN;
+    var phrase =
+      cohortPhrase != null && String(cohortPhrase).trim() !== ""
+        ? String(cohortPhrase).trim()
+        : "selected cohort";
     var main =
       '<div class="student-hex-hover-line">' +
       '<span class="student-hex-hover-value">' +
       escapeHtml(formatStudentsPerSqMiForUi(showD)) +
       "</span>" +
-      '<span class="student-hex-hover-unit"> students per square mile</span>' +
+      '<span class="student-hex-hover-unit"> grade-eligible students per square mile (' +
+      escapeHtml(phrase) +
+      ")</span>" +
       "</div>";
     var sub = "";
-    var phrase =
-      cohortPhrase != null && String(cohortPhrase).trim() !== ""
-        ? String(cohortPhrase).trim()
-        : "selected cohort";
-    if (!isNaN(rawC)) {
+    if (!isNaN(rawC) && rawC > 3) {
       sub =
         '<div class="student-hex-hover-sub">' +
         escapeHtml(rawC.toLocaleString()) +
         " student residence" +
         (rawC === 1 ? "" : "s") +
-        " in this hex (" +
-        escapeHtml(phrase) +
-        ")</div>";
+        " in this hex</div>";
     }
     return main + sub;
   }
@@ -10540,15 +11992,52 @@
       '<span class="student-hex-hover-value">' +
       escapeHtml(formatStudentsPerSqMiForUi(showC)) +
       "</span>" +
-      '<span class="student-hex-hover-unit"> charter students per square mile</span></div>';
+      '<span class="student-hex-hover-unit"> grade-eligible charter students per square mile (districtwide)</span></div>';
     var sub = "";
-    if (!isNaN(rawC)) {
+    if (!isNaN(rawC) && rawC > 3) {
       var resWord;
       if (rawC === 1) {
         resWord = "1 charter student residence in this hex";
       } else {
         resWord =
           escapeHtml(rawC.toLocaleString()) + " charter student residences in this hex";
+      }
+      sub = '<div class="student-hex-hover-sub">' + resWord + "</div>";
+    }
+    return mainLine + sub;
+  }
+
+  function homeschoolStudentHexResidenceLinesHtml(props) {
+    var showH;
+    var hkh = props && props._hexKey != null ? String(props._hexKey) : null;
+    if (hkh) {
+      var aggH = neighborhoodAverageHomeschoolResidenceStudentsPerSqMi(hkh);
+      if (aggH != null && isFinite(aggH)) {
+        showH = aggH;
+      }
+    }
+    if (showH == null || !isFinite(showH)) {
+      var rawHd =
+        props && props.students_per_sq_mi != null
+          ? Number(props.students_per_sq_mi)
+          : NaN;
+      showH = rawHd;
+    }
+    var rawCnt = props && props.count != null ? Number(props.count) : NaN;
+    var mainLine =
+      '<div class="student-hex-hover-line">' +
+      '<span class="student-hex-hover-value">' +
+      escapeHtml(formatStudentsPerSqMiForUi(showH)) +
+      "</span>" +
+      '<span class="student-hex-hover-unit"> grade-eligible homeschool students per square mile (districtwide)</span></div>';
+    var sub = "";
+    if (!isNaN(rawCnt) && rawCnt > 3) {
+      var resWord;
+      if (rawCnt === 1) {
+        resWord = "1 homeschool student residence in this hex";
+      } else {
+        resWord =
+          escapeHtml(rawCnt.toLocaleString()) + " homeschool student residences in this hex";
       }
       sub = '<div class="student-hex-hover-sub">' + resWord + "</div>";
     }
@@ -10571,7 +12060,15 @@
     );
   }
 
-  function combinedResidenceHexHoverHtml(bProps, cProps, wantB, wantC, cohortPhrase) {
+  function homeschoolStudentHexResidenceHoverHtml(props) {
+    return (
+      '<div class="student-hex-hover-inner">' +
+      homeschoolStudentHexResidenceLinesHtml(props) +
+      "</div>"
+    );
+  }
+
+  function combinedResidenceHexHoverHtml(bProps, cProps, hProps, wantB, wantC, wantH, cohortPhrase) {
     var parts = [];
     var schoolShort = studentResidenceTooltipSchoolLabel();
     if (wantB && bProps) {
@@ -10591,6 +12088,15 @@
         '<div class="student-hex-hover-section-title">Charter (districtwide)</div>' +
         '<div class="student-hex-hover-inner">' +
         charterStudentHexResidenceLinesHtml(cProps) +
+        "</div></div>"
+      );
+    }
+    if (wantH && hProps) {
+      parts.push(
+        '<div class="student-hex-hover-section">' +
+        '<div class="student-hex-hover-section-title">Homeschool (districtwide)</div>' +
+        '<div class="student-hex-hover-inner">' +
+        homeschoolStudentHexResidenceLinesHtml(hProps) +
         "</div></div>"
       );
     }
@@ -10619,12 +12125,10 @@
           features: [],
         });
       }
-      if (map.getLayer("charter-student-hex-heatmap")) {
-        map.setLayoutProperty("charter-student-hex-heatmap", "visibility", "none");
-      }
       if (map.getLayer("charter-student-hex-hit-fill")) {
         map.setLayoutProperty("charter-student-hex-hit-fill", "visibility", "none");
       }
+      syncResidenceDensityHeatmapZoomVisibility();
     }
 
     if (
@@ -10679,12 +12183,87 @@
     }
     var inp = document.getElementById("toggle-charter-student-hex");
     var vis = inp && inp.checked ? "visible" : "none";
-    if (map.getLayer("charter-student-hex-heatmap")) {
-      map.setLayoutProperty("charter-student-hex-heatmap", "visibility", vis);
-    }
     if (map.getLayer("charter-student-hex-hit-fill")) {
       map.setLayoutProperty("charter-student-hex-hit-fill", "visibility", vis);
     }
+    syncResidenceDensityHeatmapZoomVisibility();
+  }
+
+  /** Districtwide homeschool residential density; hex geometries from main student hex index. */
+  function syncHomeschoolStudentHexLayer() {
+    if (!map || !map.getSource || !map.getSource("homeschool-student-hex")) {
+      return;
+    }
+
+    function emptyHomeschoolHexAndHide() {
+      map.getSource("homeschool-student-hex").setData({
+        type: "FeatureCollection",
+        features: [],
+      });
+      if (map.getSource("homeschool-student-hex-hit")) {
+        map.getSource("homeschool-student-hex-hit").setData({
+          type: "FeatureCollection",
+          features: [],
+        });
+      }
+      if (map.getLayer("homeschool-student-hex-hit-fill")) {
+        map.setLayoutProperty("homeschool-student-hex-hit-fill", "visibility", "none");
+      }
+      syncResidenceDensityHeatmapZoomVisibility();
+    }
+
+    if (!HOMESCHOOL_HEX_COUNTS) {
+      emptyHomeschoolHexAndHide();
+      return;
+    }
+
+    var idx = HOMESCHOOL_HEX_COUNTS;
+    var features = [];
+    var hitFeatures = [];
+    for (var key in idx) {
+      if (!Object.prototype.hasOwnProperty.call(idx, key)) continue;
+      var cnt = idx[key];
+      if (cnt <= 0) continue;
+      var geom = homeschoolHexGeometry(key);
+      if (!geom) continue;
+      var pt = polygonCentroid(geom);
+      if (!pt) continue;
+      var dens = studentsPerSqMiFromCountAndGeom(cnt, geom);
+      features.push({
+        type: "Feature",
+        properties: { _hexKey: key, count: cnt, students_per_sq_mi: dens },
+        geometry: { type: "Point", coordinates: pt },
+      });
+      hitFeatures.push({
+        type: "Feature",
+        properties: {
+          _hexKey: key,
+          count: cnt,
+          students_per_sq_mi: dens,
+        },
+        geometry: geom,
+      });
+    }
+    if (features.length === 0) {
+      emptyHomeschoolHexAndHide();
+      return;
+    }
+    map.getSource("homeschool-student-hex").setData({
+      type: "FeatureCollection",
+      features: features,
+    });
+    if (map.getSource("homeschool-student-hex-hit")) {
+      map.getSource("homeschool-student-hex-hit").setData({
+        type: "FeatureCollection",
+        features: hitFeatures,
+      });
+    }
+    var inp = document.getElementById("toggle-homeschool-student-hex");
+    var vis = inp && inp.checked ? "visible" : "none";
+    if (map.getLayer("homeschool-student-hex-hit-fill")) {
+      map.setLayoutProperty("homeschool-student-hex-hit-fill", "visibility", vis);
+    }
+    syncResidenceDensityHeatmapZoomVisibility();
   }
 
   function syncStudentHexLayer() {
@@ -10702,9 +12281,6 @@
             type: "FeatureCollection",
             features: [],
           });
-        }
-        if (map.getLayer("student-hex-heatmap")) {
-          map.setLayoutProperty("student-hex-heatmap", "visibility", "none");
         }
         if (map.getLayer("student-hex-hit-fill")) {
           map.setLayoutProperty("student-hex-hit-fill", "visibility", "none");
@@ -10762,14 +12338,12 @@
       }
       var showHex = isStudentResidenceLayerEnabled();
       var vis = showHex ? "visible" : "none";
-      if (map.getLayer("student-hex-heatmap")) {
-        map.setLayoutProperty("student-hex-heatmap", "visibility", vis);
-      }
       if (map.getLayer("student-hex-hit-fill")) {
         map.setLayoutProperty("student-hex-hit-fill", "visibility", vis);
       }
     } finally {
       syncCharterDistrictStudentHexLayer();
+      syncHomeschoolStudentHexLayer();
     }
     scheduleRefreshMapDensityLegendValueRanges();
     applyResidenceHeatmapSymbology();
@@ -11005,7 +12579,25 @@
     if (gB) {
       gB.addEventListener("change", function (e) {
         var t = e.target;
-        if (!t || !t.classList || !t.classList.contains("sandbox-grade-toggle")) {
+        if (!t || !t.classList) {
+          return;
+        }
+        if (t.classList.contains("sandbox-grade-select-all")) {
+          var wantAll = t.checked;
+          BOUNDARY_SANDBOX.gradeToggles = BOUNDARY_SANDBOX.gradeToggles || Object.create(null);
+          var rowInputs = gB.querySelectorAll("input.sandbox-grade-toggle[data-grade-canon]");
+          for (var si = 0; si < rowInputs.length; si++) {
+            var bx = rowInputs[si];
+            var gcx = bx.getAttribute("data-grade-canon");
+            if (gcx == null) {
+              continue;
+            }
+            BOUNDARY_SANDBOX.gradeToggles[gcx] = wantAll;
+          }
+          updateSandboxStatsPanelSummary();
+          return;
+        }
+        if (!t.classList.contains("sandbox-grade-toggle")) {
           return;
         }
         var gc = t.getAttribute("data-grade-canon");

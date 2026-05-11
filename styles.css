@@ -704,6 +704,20 @@ button.sandbox-school-expand:hover {
   font-size: 0.75rem;
 }
 
+.sandbox-grade-row--select-all {
+  padding-bottom: 4px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.sandbox-grade-label-col--select-all {
+  flex: 1 1 auto;
+  min-width: 3rem;
+  text-align: left;
+  font-weight: 600;
+  color: #334155;
+}
+
 .sandbox-grade-check {
   flex: 0 0 auto;
   display: flex;
@@ -727,6 +741,7 @@ button.sandbox-school-expand:hover {
   text-align: right;
   color: #475569;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .sandbox-grade-bar-area {
@@ -797,6 +812,10 @@ button.sandbox-school-expand:hover {
   background: linear-gradient(90deg, #1d4ed8, #93c5fd);
 }
 
+.sandbox-grade-bar-inner.sandbox-atype--homeschool {
+  background: linear-gradient(90deg, #c2410c, #fdba74);
+}
+
 .sandbox-card__title {
   margin: 0 0 4px;
   font-size: 0.75rem;
@@ -838,6 +857,19 @@ button.sandbox-school-expand:hover {
   width: 100%;
   align-items: flex-start;
   flex-shrink: 0;
+}
+
+.sandbox-demographics-note {
+  margin: 6px 0 0;
+  font-size: 0.7rem;
+  line-height: 1.4;
+  color: #64748b;
+}
+
+.demographics-chart-card--sandbox-lunch .sandbox-demographics-note {
+  margin-top: 8px;
+  margin-bottom: 0;
+  text-align: right;
 }
 
 .sidebar-page-panel--scenario {
@@ -1099,6 +1131,41 @@ button.sandbox-school-expand:hover {
   .kpi-grid--capture {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
+
+  .kpi-grid--capture.kpi-grid--capture--five {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+
+.kpi-capture-panel__heading-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  margin-bottom: 10px;
+}
+
+.kpi-capture-panel__title {
+  margin: 0;
+}
+
+.kpi-capture-homeschool-toggle {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #374151;
+  cursor: pointer;
+  user-select: none;
+  max-width: 100%;
+}
+
+.kpi-capture-homeschool-toggle input {
+  margin-top: 0.15em;
+  flex-shrink: 0;
+  accent-color: #dc2626;
 }
 
 .kpi-capture-panel {
@@ -1970,6 +2037,26 @@ button.sandbox-school-expand:hover {
   accent-color: #2563eb;
 }
 
+.charter-private-school-toggles-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 12px 20px;
+  justify-content: flex-start;
+}
+
+.charter-private-school-toggles-row .toggles {
+  flex: 1 1 auto;
+  min-width: min-content;
+}
+
+@media (min-width: 480px) {
+  .charter-private-school-toggles-row {
+    flex-wrap: nowrap;
+    align-items: center;
+  }
+}
+
 .toggles {
   display: flex;
   flex-wrap: wrap;
@@ -2075,6 +2162,21 @@ button.sandbox-school-expand:hover {
   );
 }
 
+.toggle-gradient-strip--homeschool-red {
+  background: linear-gradient(
+    90deg,
+    #ffffff 0%,
+    #fee2e2 10%,
+    #fecaca 20%,
+    #fca5a5 35%,
+    #f87171 48%,
+    #ef4444 60%,
+    #dc2626 72%,
+    #b91c1c 84%,
+    #991b1b 100%
+  );
+}
+
 /* Aligned to school-isochrones-fill 1–10 mi palette (light near → dark far). */
 .toggle-gradient-strip--travel-sheds {
   background: linear-gradient(
@@ -2171,6 +2273,18 @@ button.sandbox-school-expand:hover {
     rgba(254, 128, 206, 0.82) 58%,
     rgba(255, 92, 192, 0.9) 80%,
     rgba(255, 64, 255, 0.94) 100%
+  );
+}
+
+.map-density-legend__bar--homeschool {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(254, 226, 226, 0.45) 10%,
+    rgba(252, 165, 165, 0.6) 28%,
+    rgba(248, 113, 113, 0.75) 48%,
+    rgba(220, 38, 38, 0.88) 72%,
+    rgba(69, 10, 10, 0.94) 100%
   );
 }
 

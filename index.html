@@ -161,9 +161,22 @@
             </article>
           </div>
           <div class="kpi-capture-panel">
-            <h2 class="enrollment-chart-heading">Attendance Boundary Capture Rates</h2>
+            <div class="kpi-capture-panel__heading-row">
+              <h2 class="enrollment-chart-heading kpi-capture-panel__title">
+                Attendance Boundary Capture Rates
+              </h2>
+              <label class="kpi-capture-homeschool-toggle">
+                <input
+                  type="checkbox"
+                  id="toggle-include-homeschool-capture"
+                  autocomplete="off"
+                />
+                <span>Include Homeschool Students</span>
+              </label>
+            </div>
             <div
               class="kpi-grid kpi-grid--capture"
+              id="kpi-grid-capture"
               role="group"
               aria-label="Attendance boundary capture rates by category"
             >
@@ -187,6 +200,10 @@
               <article class="kpi-card">
                 <p class="kpi-capture-card-label">Charter School</p>
                 <p class="kpi-value kpi-value--placeholder" id="kpi-charter-capture">—</p>
+              </article>
+              <article class="kpi-card kpi-card--homeschool-capture" id="kpi-card-homeschool-capture" hidden>
+                <p class="kpi-capture-card-label">Home School</p>
+                <p class="kpi-value kpi-value--placeholder" id="kpi-homeschool-capture">—</p>
               </article>
             </div>
           </div>
@@ -296,7 +313,7 @@
             </p>
             <p class="school-details-line school-details-meta">
               <span id="scenario-details-kpi-capture" class="school-details-text school-details-placeholder"
-                >Assignment: — | Other district: — | Choice: — | Charter: —</span
+                >Assignment: — | Other district: — | Choice: — | Charter: — | Homeschool: —</span
               >
             </p>
           </div>
@@ -321,13 +338,13 @@
 
           <fieldset
             class="scenario-feeder-fieldset"
-            aria-label="Feeder elementary schools and remaining enrollment"
+            aria-label="Feeder schools and remaining enrollment"
           >
             <legend class="visually-hidden">
-              Feeder elementary schools and remaining enrollment per elementary
+              Feeder schools; remaining elementary enrollment and utilization change where applicable
             </legend>
             <div class="scenario-feeder-heading-row">
-              <span class="scenario-feeder-heading-main">Feeder elementary schools</span>
+              <span class="scenario-feeder-heading-main">Feeder Schools</span>
               <div class="scenario-feeder-heading-metrics">
                 <span
                   class="scenario-feeder-remaining-heading"
@@ -610,7 +627,9 @@
                   <p class="demographics-pie-empty">No selection confirmed yet.</p>
                 </div>
               </div>
-              <div class="demographics-chart-card">
+              <div
+                class="demographics-chart-card demographics-chart-card--sandbox-lunch"
+              >
                 <h3 class="demographics-chart-title">Free and Reduced Lunch</h3>
                 <div
                   id="sandbox-demographics-lunch"
@@ -619,6 +638,9 @@
                 >
                   <p class="demographics-pie-empty">No selection confirmed yet.</p>
                 </div>
+                <p class="sandbox-demographics-note">
+                  Homeschool students are excluded from demographic charts.
+                </p>
               </div>
             </div>
           </section>
@@ -662,11 +684,14 @@
                 <h2 class="layer-section-title" id="heading-school-parcels">School Parcels</h2>
                 <div class="toggles" id="school-parcel-toggles"></div>
               </section>
-              <section class="layer-section" aria-labelledby="heading-charter-schools">
-                <h2 class="layer-section-title" id="heading-charter-schools">
-                  Charter School Locations
+              <section class="layer-section" aria-labelledby="heading-non-traditional-schools">
+                <h2 class="layer-section-title" id="heading-non-traditional-schools">
+                  Non-Traditional School Locations
                 </h2>
-                <div class="toggles" id="charter-school-toggles"></div>
+                <div class="charter-private-school-toggles-row">
+                  <div class="toggles" id="charter-school-toggles"></div>
+                  <div class="toggles" id="private-school-toggles"></div>
+                </div>
               </section>
               <section class="layer-section" aria-labelledby="heading-travel-sheds">
                 <h2 class="layer-section-title" id="heading-travel-sheds">Travel sheds</h2>
@@ -728,6 +753,11 @@
                     class="toggles"
                     id="charter-student-hex-toggles"
                     aria-label="Charter student residence map"
+                  ></div>
+                  <div
+                    class="toggles"
+                    id="homeschool-student-hex-toggles"
+                    aria-label="Homeschool student residence map"
                   ></div>
                   <div
                     class="student-hex-tooltip-row"
@@ -816,6 +846,22 @@
             <div class="map-density-legend__axis">
               <span class="map-density-legend__val" id="map-density-legend-charter-min">—</span>
               <span class="map-density-legend__val" id="map-density-legend-charter-max">—</span>
+            </div>
+            <p class="map-density-legend__val-note">
+              Neighborhood-mean students per square mile (min - max) in view
+            </p>
+          </div>
+          <div class="map-density-legend__row" id="map-density-legend-homeschool" hidden>
+            <div class="map-density-legend__title">Homeschool student residences</div>
+            <div
+              class="map-density-legend__bar map-density-legend__bar--homeschool"
+              role="img"
+              id="map-density-legend-homeschool-scale"
+              aria-label="Color scale: light to deep red; numbers are neighborhood-mean homeschool students per square mile in view"
+            ></div>
+            <div class="map-density-legend__axis">
+              <span class="map-density-legend__val" id="map-density-legend-homeschool-min">—</span>
+              <span class="map-density-legend__val" id="map-density-legend-homeschool-max">—</span>
             </div>
             <p class="map-density-legend__val-note">
               Neighborhood-mean students per square mile (min - max) in view
