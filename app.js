@@ -239,6 +239,11 @@
   var CHOICE_SCHOOL_MSIDS = null;
   /** SCHOOLS_ID keys for charter schools (TYPE/SchAB_Type CHARTER on boundary + charter location layers). */
   var CHARTER_SCHOOL_MSIDS = null;
+  /**
+   * Charter MSID string → "K–5" style span from student-hex rows where attendance MSID matches
+   * (min–max grade among students, treating gaps as consecutive for display).
+   */
+  var CHARTER_ATTENDANCE_GRADES_LABEL_BY_MSID = null;
   /** Projected school-year column labels (matches CSV projected_* headers). */
   var MASTER_PROJECTION_LABELS = ["2026-27", "2027-28", "2028-29", "2029-30", "2030-31"];
   /** Slugs and display labels for ethnicity count columns in the master CSV. */
@@ -764,6 +769,59 @@
   };
   var schoolMapCircleStrokeColorDefault = "#ffffff";
 
+  /** Shared zoom → px radius for school location dots (Mapbox `circle-radius`). */
+  var SCHOOL_MAP_CIRCLE_RADIUS_ZOOM = [
+    "interpolate",
+    ["linear"],
+    ["zoom"],
+    8,
+    3,
+    12,
+    6,
+    16,
+    10,
+  ];
+
+  /**
+   * Quintile → radius multiplier for charter + private location dots (`_pe_quintile` on features).
+   */
+  var ENROLLMENT_QUINTILE_RADIUS_MULT = [
+    "match",
+    ["to-number", ["get", "_pe_quintile"]],
+    0,
+    0.5,
+    1,
+    1,
+    2,
+    1.5,
+    3,
+    2,
+    4,
+    2.5,
+    1,
+  ];
+
+  /**
+   * Mapbox requires `["zoom"]` as input to a top-level `interpolate`/`step` in paint — cannot wrap
+   * the zoom interpolate inside `*`; scale each zoom stop by enrollment quintile instead.
+   */
+  function varyEnrollmentCircleRadiusPaintExpr(vary) {
+    if (vary) {
+      return [
+        "interpolate",
+        ["linear"],
+        ["zoom"],
+        8,
+        ["*", 3, ENROLLMENT_QUINTILE_RADIUS_MULT],
+        12,
+        ["*", 6, ENROLLMENT_QUINTILE_RADIUS_MULT],
+        16,
+        ["*", 10, ENROLLMENT_QUINTILE_RADIUS_MULT],
+      ];
+    }
+    return SCHOOL_MAP_CIRCLE_RADIUS_ZOOM;
+  }
+
   /** More transparent assignment zone fills */
   var BOUNDARY_FILL_OPACITY = 0.1;
 
@@ -816,6 +874,27 @@
     zoom: 8,
     maxZoom: 19,
   });
+
+  function syncCharterPrivateVaryEnrollmentCirclePaint() {
+    if (!map || !map.getLayer) return;
+    var inp = document.getElementById("toggle-nontraditional-vary-enrollment-size");
+    var vary = !!(inp && inp.checked);
+    var rad = varyEnrollmentCircleRadiusPaintExpr(vary);
+    try {
+      if (map.getLayer("schools-charter")) {
+        map.setPaintProperty("schools-charter", "circle-radius", rad);
+      }
+    } catch (errSyncCh) {
+      /* ignore */
+    }
+    try {
+      if (map.getLayer("schools-private")) {
+        map.setPaintProperty("schools-private", "circle-radius", rad);
+      }
+    } catch (errSyncPs) {
+      /* ignore */
+    }
+  }
 
   map.addControl(new mapboxgl.NavigationControl(), "top-left");
   map.addControl(
@@ -1278,9 +1357,9 @@
     var studentHexFc = results[6];
     var schoolParcelsRaw = results[7];
     var schoolBoardFc = results[8];
-    var charterFc = results[9];
+    var charterFc = prepareCharterSchoolsMapFc(results[9]);
     var municipalFc = results[11];
-    var privateFc = filterZeroEnrollmentPrivateSchoolsFc(results[16]);
+    var privateFc = preparePrivateSchoolsMapFc(results[16]);
     var homeschoolFc = results[17];
     CHARTER_SCHOOL_MSIDS = buildCharterSchoolMsidSet(schools, charterFc);
 
@@ -1291,6 +1370,7 @@
       STUDENT_HEX_INDEX = null;
       TRAVEL_SHED_RESIDENCE_INDEX = null;
     }
+    rebuildCharterAttendanceGradesLabelByMsid();
     HOMESCHOOL_HEX_COUNTS = buildHomeschoolHexCounts(
       homeschoolFc && homeschoolFc.features ? homeschoolFc : null
     );
@@ -1626,9 +1706,9 @@
     var studentHexFc = results[6];
     var schoolParcelsRaw = results[7];
     var schoolBoardFc = results[8];
-    var charterFc = results[9];
+    var charterFc = prepareCharterSchoolsMapFc(results[9]);
     var municipalFc = results[11];
-    var privateFc = filterZeroEnrollmentPrivateSchoolsFc(results[16]);
+    var privateFc = preparePrivateSchoolsMapFc(results[16]);
     var homeschoolFc = results[17];
     CHARTER_SCHOOL_MSIDS = buildCharterSchoolMsidSet(schools, charterFc);
     SCHOOL_ISOCHRONES_ENRICHED = buildSchoolIsochronesEnriched(
@@ -2229,17 +2309,7 @@
         ];
         var schoolMapCircleBasePaint = {
           "circle-pitch-alignment": "map",
-          "circle-radius": [
-            "interpolate",
-            ["linear"],
-            ["zoom"],
-            8,
-            3,
-            12,
-            6,
-            16,
-            10,
-          ],
+          "circle-radius": SCHOOL_MAP_CIRCLE_RADIUS_ZOOM,
           "circle-stroke-width": [
             "case",
             schoolMapHighlightStateAny,
@@ -2404,6 +2474,7 @@
           STUDENT_HEX_INDEX = null;
           TRAVEL_SHED_RESIDENCE_INDEX = null;
         }
+        rebuildCharterAttendanceGradesLabelByMsid();
         HOMESCHOOL_HEX_COUNTS = buildHomeschoolHexCounts(
           homeschoolFc && homeschoolFc.features ? homeschoolFc : null
         );
@@ -2675,6 +2746,56 @@
       }
     }
     return o;
+  }
+
+  /**
+   * Builds `CHARTER_ATTENDANCE_GRADES_LABEL_BY_MSID`: for each charter MSID, min–max grade among
+   * student-hex detail rows with that attendance MSID (consecutive span for display, e.g. K–5).
+   */
+  function rebuildCharterAttendanceGradesLabelByMsid() {
+    CHARTER_ATTENDANCE_GRADES_LABEL_BY_MSID = null;
+    if (
+      !STUDENT_HEX_INDEX ||
+      !STUDENT_HEX_INDEX.detailsByMsid ||
+      !CHARTER_SCHOOL_MSIDS
+    ) {
+      return;
+    }
+    var detRoot = STUDENT_HEX_INDEX.detailsByMsid;
+    var out = Object.create(null);
+    for (var sk in CHARTER_SCHOOL_MSIDS) {
+      if (!Object.prototype.hasOwnProperty.call(CHARTER_SCHOOL_MSIDS, sk)) continue;
+      var perHex = detRoot[sk];
+      if (!perHex) continue;
+      var ordsObj = Object.create(null);
+      for (var hexKey in perHex) {
+        if (!Object.prototype.hasOwnProperty.call(perHex, hexKey)) continue;
+        var arr = perHex[hexKey];
+        for (var i = 0; i < arr.length; i++) {
+          var c = canonicalStudentGradeCode(arr[i].Grade);
+          var o = charterGradeCanonToOrdinal(c);
+          if (o != null && isFinite(o)) ordsObj[o] = true;
+        }
+      }
+      var ords = Object.keys(ordsObj)
+        .map(Number)
+        .sort(function (a, b) {
+          return a - b;
+        });
+      if (!ords.length) continue;
+      var minO = ords[0];
+      var maxO = ords[ords.length - 1];
+      var a = privateSchoolGradeOrdinalLabel(minO);
+      var b = privateSchoolGradeOrdinalLabel(maxO);
+      var label = minO === maxO ? a : a + "–" + b;
+      out[sk] = label;
+      var idNum = parseInt(sk, 10);
+      if (!isNaN(idNum)) {
+        var padded = String(idNum).padStart(4, "0");
+        if (padded !== sk) out[padded] = label;
+      }
+    }
+    CHARTER_ATTENDANCE_GRADES_LABEL_BY_MSID = out;
   }
 
   /** Choice or charter schools have no boundary-based "zoned" cohort for student hex overlay. */
@@ -4789,6 +4910,7 @@
     panel.querySelectorAll('input[type="checkbox"][id^="toggle-"]').forEach(function (inp) {
       inp.dispatchEvent(new Event("change", { bubbles: true }));
     });
+    syncCharterPrivateVaryEnrollmentCirclePaint();
   }
 
   function appendToggleRow(container, def, onAfterChange) {
@@ -5082,6 +5204,12 @@
         defaultChecked: false,
       });
     }
+    var varyEnrollmentSizeInput = document.getElementById("toggle-nontraditional-vary-enrollment-size");
+    if (varyEnrollmentSizeInput) {
+      varyEnrollmentSizeInput.addEventListener("change", function () {
+        syncCharterPrivateVaryEnrollmentCirclePaint();
+      });
+    }
     var privateSchoolTogglesEl = document.getElementById("private-school-toggles");
     if (privateSchoolTogglesEl) {
       appendToggleRow(privateSchoolTogglesEl, {
@@ -5092,6 +5220,7 @@
         defaultChecked: false,
       });
     }
+    syncCharterPrivateVaryEnrollmentCirclePaint();
     syncMapDensityLegend();
   }
 
@@ -5472,6 +5601,129 @@
     return { type: "FeatureCollection", features: kept };
   }
 
+  /**
+   * Equal-count quintiles (0 = lowest ~20%) from total grade enrollment; sets `_pe_quintile` for map sizing.
+   * Returns a new feature collection (does not mutate the input).
+   */
+  function enrichPrivateSchoolFcWithEnrollmentQuintiles(fc) {
+    if (!fc || fc.type !== "FeatureCollection" || !fc.features) {
+      return { type: "FeatureCollection", features: [] };
+    }
+    var features = fc.features;
+    var n = features.length;
+    if (!n) {
+      return { type: "FeatureCollection", features: [] };
+    }
+    var items = [];
+    for (var i = 0; i < n; i++) {
+      var eg = privateSchoolEnrollmentGradeSpan(features[i].properties);
+      items.push({ index: i, total: eg.total });
+    }
+    items.sort(function (a, b) {
+      if (a.total !== b.total) return a.total - b.total;
+      return a.index - b.index;
+    });
+    var quintileByIndex = new Array(n);
+    for (var j = 0; j < n; j++) {
+      quintileByIndex[items[j].index] = Math.min(4, Math.floor((j * 5) / n));
+    }
+    var outFeatures = [];
+    for (var k = 0; k < n; k++) {
+      var f = features[k];
+      var props = Object.assign({}, f.properties || {}, {
+        _pe_quintile: quintileByIndex[k],
+      });
+      outFeatures.push({
+        type: "Feature",
+        geometry: f.geometry,
+        properties: props,
+      });
+    }
+    return { type: "FeatureCollection", features: outFeatures };
+  }
+
+  function charterEnrollmentTotalForQuintile(msid) {
+    var m = masterRow(msid);
+    if (!m) return 0;
+    function num(key) {
+      var raw = m[key];
+      if (raw === "" || raw == null) return NaN;
+      var v = Number(raw);
+      return isNaN(v) ? NaN : v;
+    }
+    var keys = [
+      "sy2526_actual",
+      "enrollment_2025",
+      "enrollment_2024",
+      "enrollment_2023",
+      "enrollment_2022",
+      "enrollment_2021",
+      "enrollment_2020",
+      "enrollment_2019",
+      "enrollment_2018",
+      "enrollment_2017",
+    ];
+    for (var i = 0; i < keys.length; i++) {
+      var v = num(keys[i]);
+      if (isFinite(v) && v > 0) return v;
+    }
+    return 0;
+  }
+
+  /**
+   * Equal-count quintiles from school_master enrollment (2025-26 actual when present, else latest calendar column).
+   */
+  function enrichCharterFcWithEnrollmentQuintiles(fc) {
+    if (!fc || fc.type !== "FeatureCollection" || !fc.features) {
+      return { type: "FeatureCollection", features: [] };
+    }
+    var features = fc.features;
+    var n = features.length;
+    if (!n) {
+      return { type: "FeatureCollection", features: [] };
+    }
+    var items = [];
+    for (var i = 0; i < n; i++) {
+      var p = features[i].properties || {};
+      var msid = p.SCHOOLS_ID != null ? Number(p.SCHOOLS_ID) : NaN;
+      var total = !isNaN(msid) ? charterEnrollmentTotalForQuintile(msid) : 0;
+      items.push({ index: i, total: total });
+    }
+    items.sort(function (a, b) {
+      if (a.total !== b.total) return a.total - b.total;
+      return a.index - b.index;
+    });
+    var quintileByIndex = new Array(n);
+    for (var j = 0; j < n; j++) {
+      quintileByIndex[items[j].index] = Math.min(4, Math.floor((j * 5) / n));
+    }
+    var outFeatures = [];
+    for (var k = 0; k < n; k++) {
+      var f = features[k];
+      var props = Object.assign({}, f.properties || {}, {
+        _pe_quintile: quintileByIndex[k],
+      });
+      outFeatures.push({
+        type: "Feature",
+        geometry: f.geometry,
+        properties: props,
+      });
+    }
+    return { type: "FeatureCollection", features: outFeatures };
+  }
+
+  function prepareCharterSchoolsMapFc(rawFc) {
+    return enrichCharterFcWithEnrollmentQuintiles(
+      rawFc || { type: "FeatureCollection", features: [] }
+    );
+  }
+
+  function preparePrivateSchoolsMapFc(rawFc) {
+    return enrichPrivateSchoolFcWithEnrollmentQuintiles(
+      filterZeroEnrollmentPrivateSchoolsFc(rawFc)
+    );
+  }
+
   function formatPrivateSchoolZipFive(zipRaw) {
     if (zipRaw == null) return "";
     var d = String(zipRaw).replace(/\D/g, "");
@@ -5512,6 +5764,42 @@
     var addr = privateSchoolAddressLine(p);
     if (addr) {
       parts.push('<div class="popup-detail">' + escapeHtml(addr) + "</div>");
+    }
+    return parts.join("");
+  }
+
+  /** Charter location dots: name + grades (student-hex attendance span) + enrollment + address from master CSV. */
+  function charterSchoolDetailHtml(p) {
+    var sid = p && p.SCHOOLS_ID != null ? Number(p.SCHOOLS_ID) : NaN;
+    var name = schoolDisplayNameFromProps(p) || "Charter school";
+    var m = !isNaN(sid) ? masterRow(sid) : null;
+    var sk = !isNaN(sid) ? String(sid) : "";
+    var skPad = !isNaN(sid) ? String(sid).padStart(4, "0") : "";
+    var hexGrades =
+      CHARTER_ATTENDANCE_GRADES_LABEL_BY_MSID && sk
+        ? CHARTER_ATTENDANCE_GRADES_LABEL_BY_MSID[sk] ||
+          CHARTER_ATTENDANCE_GRADES_LABEL_BY_MSID[skPad]
+        : null;
+    var gradesRaw = m && m.grades_served != null ? String(m.grades_served).trim() : "";
+    var gradesUi = normalizeGradesServedForUi(gradesRaw);
+    var gradesLabel = hexGrades || gradesUi || "—";
+    var total = !isNaN(sid) ? charterEnrollmentTotalForQuintile(sid) : 0;
+    var totalStr = total > 0 ? String(total.toLocaleString()) : "—";
+    var parts = [
+      '<strong class="popup-school-name">' + escapeHtml(name) + "</strong>",
+      '<div class="popup-detail">Grades Served: ' + escapeHtml(gradesLabel) + "</div>",
+      '<div class="popup-detail">Total Enrollment: ' + escapeHtml(totalStr) + "</div>",
+    ];
+    if (m) {
+      var streetRaw = m.address != null ? String(m.address).trim() : "";
+      var cszRaw = m.city_state_zip != null ? String(m.city_state_zip).trim() : "";
+      var addrBits = [];
+      if (streetRaw) addrBits.push(standardCapitalization(streetRaw));
+      if (cszRaw) addrBits.push(formatCityStateZip(cszRaw));
+      var addrCombined = addrBits.join(", ");
+      if (addrCombined) {
+        parts.push('<div class="popup-detail">' + escapeHtml(addrCombined) + "</div>");
+      }
     }
     return parts.join("");
   }
@@ -5594,7 +5882,6 @@
     var sep = document.createElement("option");
     sep.disabled = true;
     sep.value = "";
-    sep.setAttribute("aria-hidden", "true");
     sep.textContent = "────────────────────────";
     sel.appendChild(sep);
 
@@ -9988,11 +10275,29 @@
         return;
       }
 
+      if (layerId === "schools-charter") {
+        clearBoundaryHoverUi();
+        var pCh = top.properties;
+        var hMsidCh = pCh.SCHOOLS_ID != null ? Number(pCh.SCHOOLS_ID) : null;
+        if (hMsidCh != null && !isNaN(hMsidCh)) {
+          setAssignmentHoverHighlightForSchoolMsid(hMsidCh);
+        } else {
+          clearOutlineHighlight();
+          clearHoverRing();
+          refreshAssignmentBoundaryHighlight();
+        }
+        map.getCanvas().style.cursor = "pointer";
+        schoolHoverPopup
+          .setLngLat(e.lngLat)
+          .setHTML(charterSchoolDetailHtml(pCh))
+          .addTo(map);
+        return;
+      }
+
       if (
         layerId === "schools-elementary" ||
         layerId === "schools-middle" ||
-        layerId === "schools-high" ||
-        layerId === "schools-charter"
+        layerId === "schools-high"
       ) {
         clearBoundaryHoverUi();
         var p = top.properties;
@@ -11378,6 +11683,16 @@
     if (n >= 1 && n <= 9) return "0" + n;
     if (n >= 10 && n <= 12) return String(n);
     return null;
+  }
+
+  /** Ordinal for min–max span: Pre-K −2, K −1, grade 1–12 as numbers (matches private-school labels). */
+  function charterGradeCanonToOrdinal(canon) {
+    if (canon == null || canon === "") return null;
+    if (canon === "PK") return -2;
+    if (canon === "K") return -1;
+    var n = parseInt(String(canon), 10);
+    if (isNaN(n)) return null;
+    return n;
   }
 
   /** @returns {Object<string, true>} */

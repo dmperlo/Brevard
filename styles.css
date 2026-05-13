@@ -2037,24 +2037,37 @@ button.sandbox-school-expand:hover {
   accent-color: #2563eb;
 }
 
-.charter-private-school-toggles-row {
+.nontraditional-school-locations-stack {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.nontraditional-school-locations-stack .charter-private-school-toggles-row {
+  display: flex;
+  flex-wrap: nowrap;
   align-items: flex-start;
   gap: 12px 20px;
   justify-content: flex-start;
+  width: 100%;
 }
 
-.charter-private-school-toggles-row .toggles {
-  flex: 1 1 auto;
+.nontraditional-school-locations-stack .charter-private-school-toggles-row .toggles {
+  flex: 0 1 auto;
   min-width: min-content;
 }
 
-@media (min-width: 480px) {
-  .charter-private-school-toggles-row {
-    flex-wrap: nowrap;
-    align-items: center;
-  }
+.toggle-nested-row--vary-enrollment {
+  padding-left: 0;
+  align-self: flex-start;
+  font-size: 0.85rem;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.toggle-nested-row--vary-enrollment .student-hex-tooltip-label {
+  white-space: nowrap;
 }
 
 .toggles {
